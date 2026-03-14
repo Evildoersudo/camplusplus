@@ -1,0 +1,70 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS / misc
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+log/
+logs/
+
+# Model checkpoints and exported weights
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# Kaldi / embedding outputs
+*.ark
+*.scp
+*.score
+*.metrics
+*.npy
+
+# Experiment outputs
+exp/
+**/exp/
+pretrained/
+
+# Dataset and downloaded archives
+data/
+**/data/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.xz
+*.cfg
+
+# Runtime temp files
+tmp/
+temp/
+*.tmp
