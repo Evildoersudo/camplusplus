@@ -25,8 +25,14 @@ def main():
     config_file = os.path.join(args.exp_dir, 'config.yaml')
     config = build_config(config_file)
 
-    rank = int(os.environ['LOCAL_RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
+    # Support both torchrun-based distributed extraction and normal
+    # single-process execution on Windows.
+    if 'LOCAL_RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        rank = int(os.environ['LOCAL_RANK'])
+        world_size = int(os.environ['WORLD_SIZE'])
+    else:
+        rank = 0
+        world_size = 1
 
     embedding_dir = os.path.join(args.exp_dir, 'embeddings')
     os.makedirs(embedding_dir, exist_ok=True)

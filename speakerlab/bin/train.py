@@ -27,24 +27,56 @@ def main():
     args, overrides = parser.parse_known_args(sys.argv[1:])
     config = build_config(args.config, overrides, True)
 
-    rank = int(os.environ['LOCAL_RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
-    gpu = int(args.gpu[rank])
-    torch.cuda.set_device(gpu)
-    dist.init_process_group(backend='nccl')
+    # Fall back to a normal single-process training loop when distributed
+    # environment variables are absent. This is the practical path on Windows.
+    distributed = 'LOCAL_RANK' in os.environ and 'WORLD_SIZE' in os.environ
+    if distributed:
+        rank = int(os.environ['LOCAL_RANK'])
+        world_size = int(os.environ['WORLD_SIZE'])
+    else:
+        rank = 0
+        world_size = 1
+
+    # Prefer CUDA whenever it is available. The --gpu argument only controls
+    # which device index to select.
+    use_cuda = torch.cuda.is_available()
+    if use_cuda:
+        if args.gpu is not None and len(args.gpu) > 0:
+            gpu = int(args.gpu[rank % len(args.gpu)])
+        else:
+            gpu = 0
+        torch.cuda.set_device(gpu)
+    else:
+        gpu = None
+
+    if distributed:
+        backend = 'nccl' if use_cuda else 'gloo'
+        dist.init_process_group(backend=backend)
 
     set_seed(args.seed)
 
     os.makedirs(config.exp_dir, exist_ok=True)
     logger = get_logger('%s/train.log' % config.exp_dir)
-    logger.info(f"Use GPU: {gpu} for training.")
+    logger.info(f"Python executable: {sys.executable}")
+    logger.info(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+    logger.info(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+    if use_cuda:
+        logger.info(f"Use GPU: {gpu} for training.")
+    else:
+        logger.info("Use CPU for training.")
 
     # dataset
     train_dataset = build('dataset', config)
     # dataloader
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    config.dataloader['args']['sampler'] = train_sampler
-    config.dataloader['args']['batch_size'] = int(config.batch_size / world_size)
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        config.dataloader['args']['sampler'] = train_sampler
+        config.dataloader['args']['batch_size'] = int(config.batch_size / world_size)
+    else:
+        train_sampler = None
+        config.dataloader['args'].pop('sampler', None)
+        config.dataloader['args']['shuffle'] = True
+        config.dataloader['args']['batch_size'] = int(config.batch_size)
     train_dataloader = build('dataloader', config)
 
     # model
@@ -56,8 +88,10 @@ def main():
 
     classifier = build('classifier', config)
     model = nn.Sequential(embedding_model, classifier)
-    model.cuda()
-    model = torch.nn.parallel.DistributedDataParallel(model)
+    device = torch.device('cuda', gpu) if use_cuda else torch.device('cpu')
+    model.to(device)
+    if distributed:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu] if use_cuda else None)
 
     # optimizer
     config.optimizer['args']['params'] = model.parameters()
@@ -80,12 +114,13 @@ def main():
 
     # resume from a checkpoint
     if args.resume:
-        checkpointer.recover_if_possible(device='cuda')
+        checkpointer.recover_if_possible(device=device)
 
     cudnn.benchmark = True
 
     for epoch in epoch_counter:
-        train_sampler.set_epoch(epoch)
+        if distributed:
+            train_sampler.set_epoch(epoch)
 
         # train one epoch
         train_stats = train(
@@ -99,6 +134,7 @@ def main():
             logger,
             config,
             rank,
+            device,
         )
 
         if rank == 0:
@@ -111,9 +147,10 @@ def main():
             if epoch % config.save_epoch_freq == 0:
                 checkpointer.save_checkpoint(epoch=epoch)
 
-        dist.barrier()
+        if distributed:
+            dist.barrier()
 
-def train(train_loader, model, criterion, optimizer, epoch, lr_scheduler, margin_scheduler, logger, config, rank):
+def train(train_loader, model, criterion, optimizer, epoch, lr_scheduler, margin_scheduler, logger, config, rank, device):
     train_stats = AverageMeters()
     train_stats.add('Time', ':6.3f')
     train_stats.add('Data', ':6.3f')
@@ -140,8 +177,8 @@ def train(train_loader, model, criterion, optimizer, epoch, lr_scheduler, margin
         lr_scheduler.step(iter_num)
         margin_scheduler.step(iter_num)
 
-        x = x.cuda(non_blocking=True)
-        y = y.cuda(non_blocking=True)
+        x = x.to(device, non_blocking=(device.type == 'cuda'))
+        y = y.to(device, non_blocking=(device.type == 'cuda'))
 
         # compute output
         output = model(x)

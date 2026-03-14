@@ -15,23 +15,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set -e
+
+# Stage control and dataset selection.
 stage=-1
 stop_stage=-1
 data=data
+dataset=3dspeaker
+
+# VCTK-specific options. They are only used when dataset=vctk.
+vctk_sample_rate=16000
+vctk_resampled_dir=
+vctk_max_speakers=0
+vctk_max_utts_per_speaker=0
+vctk_num_train_utts=250
+vctk_num_test_utts=50
+vctk_num_target_trials=20
+vctk_num_nontarget_trials=20
+vctk_seed=1234
 
 . utils/parse_options.sh || exit 1
 
 download_dir=${data}/download_data
 rawdata_dir=${data}/raw_data
+if [ -z "${vctk_resampled_dir}" ]; then
+  # Reuse the already-resampled 16 kHz VCTK tree under data/.
+  vctk_resampled_dir=${data}/vctk_16k/wav16k
+fi
 
-if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
+if [ "${dataset}" = "3dspeaker" ] && [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
+  # Download the archives required by the original 3D-Speaker recipe.
   echo "Download musan.tar.gz, rirs_noises.zip, train.tar.gz test.tar.gz 3dspeaker_files.tar.gz"
   echo "This may take a long time. Thus we recommand you to download all archives above in your own way first."
 
   ./local/download_data.sh --download_dir ${download_dir}
 fi
 
-if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
+if [ "${dataset}" = "3dspeaker" ] && [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
+  # Unpack the downloaded archives into raw_data/.
   echo "Decompress all archives ..."
   echo "This could take some time ..."
 
@@ -59,7 +80,8 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
   echo "Decompress success !!!"
 fi
 
-if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+if [ "${dataset}" = "3dspeaker" ] && [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+  # Convert the unpacked 3D-Speaker data into Kaldi-style metadata files.
   echo "Prepare wav.scp for 3dspeaker datasets"
   export LC_ALL=C # kaldi config
 
@@ -99,4 +121,35 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   cp ${rawdata_dir}/3dspeaker/files/trials_cross_dialect ${base_path}/trials/trials_cross_dialect
   
   echo "Data Preparation Success !!!"
+fi
+
+if [ "${dataset}" = "vctk" ] && [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+  # Split VCTK into train/test and generate wav.scp, utt2spk, spk2utt, and trials.
+  echo "Prepare train/test metadata for VCTK dataset"
+  export LC_ALL=C # kaldi config
+
+  if [ ! -d "${vctk_resampled_dir}" ]; then
+    echo "VCTK 16k wav directory not found: ${vctk_resampled_dir}"
+    exit 1
+  fi
+
+  python local/prepare_vctk_split.py \
+    --wav_dir "${vctk_resampled_dir}" \
+    --out_dir "${data}/vctk" \
+    --max_speakers ${vctk_max_speakers} \
+    --max_utts_per_speaker ${vctk_max_utts_per_speaker} \
+    --num_train_utts ${vctk_num_train_utts} \
+    --num_test_utts ${vctk_num_test_utts} \
+    --num_target_trials ${vctk_num_target_trials} \
+    --num_nontarget_trials ${vctk_num_nontarget_trials} \
+    --seed ${vctk_seed}
+
+  echo "VCTK train/test metadata preparation Success !!!"
+fi
+
+if [ "${dataset}" = "vctk" ] && [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
+  # Build the CSV file consumed by speakerlab.dataset.dataset.WavSVDataset.
+  echo "Generate train.csv for VCTK dataset"
+  python local/prepare_data_csv.py --data_dir ${data}/vctk/train --sample_rate ${vctk_sample_rate}
+  echo "VCTK CSV preparation Success !!!"
 fi
