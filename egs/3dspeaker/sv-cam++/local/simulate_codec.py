@@ -8,7 +8,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Batch-encode wav files and decode them back to degraded wavs.")
     parser.add_argument("--clean_dir", type=str, required=True, help="Root directory of clean wav files")
     parser.add_argument("--degraded_dir", type=str, required=True, help="Root directory of degraded wav outputs")
-    parser.add_argument("--codec", type=str, default="opus", choices=["opus"], help="Codec to simulate")
+    parser.add_argument(
+        "--codec",
+        type=str,
+        default="opus",
+        choices=["opus", "g711_mulaw", "g711_alaw", "amrwb"],
+        help="Codec to simulate",
+    )
     parser.add_argument("--bitrate", type=str, default="8k", help="Target codec bitrate, e.g. 8k")
     parser.add_argument("--sample_rate", type=int, default=16000, help="Output wav sample rate after decoding")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing degraded wav files")
@@ -31,21 +37,55 @@ def run_ffmpeg(cmd):
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def process_audio(input_wav: Path, output_wav: Path, codec: str, bitrate: str, sample_rate: int):
-    # Store the temporary compressed file next to the final degraded wav so cleanup is local.
-    temp_file = output_wav.with_suffix(f".{codec}")
+def build_ffmpeg_commands(input_wav: Path, output_wav: Path, codec: str, bitrate: str, sample_rate: int):
+    # Use a codec-specific intermediate file so the lossy encode/decode path is
+    # explicit and easy to inspect when comparing communication codecs.
+    if codec == "opus":
+        temp_file = output_wav.with_suffix(".opus")
+        encode_cmd = [
+            "ffmpeg", "-y", "-i", str(input_wav),
+            "-c:a", "libopus", "-b:a", bitrate, str(temp_file)
+        ]
+    elif codec == "g711_mulaw":
+        temp_file = output_wav.with_name(output_wav.stem + ".mulaw.wav")
+        # G.711 is a narrowband telephone codec, so encode at 8 kHz mono.
+        encode_cmd = [
+            "ffmpeg", "-y", "-i", str(input_wav),
+            "-ar", "8000", "-ac", "1", "-c:a", "pcm_mulaw", str(temp_file)
+        ]
+    elif codec == "g711_alaw":
+        temp_file = output_wav.with_name(output_wav.stem + ".alaw.wav")
+        encode_cmd = [
+            "ffmpeg", "-y", "-i", str(input_wav),
+            "-ar", "8000", "-ac", "1", "-c:a", "pcm_alaw", str(temp_file)
+        ]
+    elif codec == "amrwb":
+        temp_file = output_wav.with_suffix(".amr")
+        # AMR-WB is a 16 kHz wideband speech codec. The bitrate parameter should
+        # be a valid AMR-WB rate such as 6.60k, 8.85k, 12.65k, or 23.85k.
+        encode_cmd = [
+            "ffmpeg", "-y", "-i", str(input_wav),
+            "-ar", "16000", "-ac", "1", "-c:a", "libvo_amrwbenc", "-b:a", bitrate, "-f", "amr", str(temp_file)
+        ]
+    else:
+        raise ValueError(f"Unsupported codec: {codec}")
 
-    # Step 1: encode the clean wav into a lossy compressed representation.
-    encode_cmd = [
-        "ffmpeg", "-y", "-i", str(input_wav),
-        "-c:a", "libopus", "-b:a", bitrate, str(temp_file)
-    ]
-
-    # Step 2: decode back to wav because the downstream speaker model expects wav input.
+    # Decode back to wav because the downstream speaker model expects wav input.
     decode_cmd = [
         "ffmpeg", "-y", "-i", str(temp_file),
         "-ar", str(sample_rate), str(output_wav)
     ]
+    return temp_file, encode_cmd, decode_cmd
+
+
+def process_audio(input_wav: Path, output_wav: Path, codec: str, bitrate: str, sample_rate: int):
+    temp_file, encode_cmd, decode_cmd = build_ffmpeg_commands(
+        input_wav=input_wav,
+        output_wav=output_wav,
+        codec=codec,
+        bitrate=bitrate,
+        sample_rate=sample_rate,
+    )
 
     run_ffmpeg(encode_cmd)
     run_ffmpeg(decode_cmd)

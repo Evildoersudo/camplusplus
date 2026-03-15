@@ -23,9 +23,20 @@ def parse_args():
     parser.add_argument("--trials_file", type=str, required=True, help="Trials file")
     parser.add_argument("--clean_wav_root", type=str, required=True, help="Root directory of clean wavs")
     parser.add_argument("--degraded_wav_root", type=str, required=True, help="Root directory of degraded wavs")
-    parser.add_argument("--bitrate", type=str, default="8k", help="Target codec bitrate, e.g. 8k")
+    parser.add_argument(
+        "--bitrate",
+        type=str,
+        default="8k",
+        help="Target codec bitrate, e.g. 8k for Opus or 12.65k for AMR-WB",
+    )
     parser.add_argument("--sample_rate", type=int, default=16000, help="Output wav sample rate after decoding")
-    parser.add_argument("--codec", type=str, default="opus", choices=["opus"], help="Codec to simulate")
+    parser.add_argument(
+        "--codec",
+        type=str,
+        default="opus",
+        choices=["opus", "g711_mulaw", "g711_alaw", "amrwb"],
+        help="Codec to simulate",
+    )
     parser.add_argument("--fraction", type=float, default=1.0, help="Only use the first fraction of trials")
     parser.add_argument("--limit", type=int, default=0, help="Only use the first N trials after fractioning")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing degraded wav files")
