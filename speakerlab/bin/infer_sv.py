@@ -17,6 +17,7 @@ Usage:
 import os
 import sys
 import re
+import shutil
 import pathlib
 import numpy as np
 import argparse
@@ -232,16 +233,27 @@ def main():
     embedding_dir = save_dir / 'embeddings'
     embedding_dir.mkdir(exist_ok=True, parents=True)
 
-    # link
+    # Reuse downloaded files locally. On Windows, creating symlinks often
+    # requires administrator or developer-mode privileges, so fall back to
+    # copying when symlink creation is not permitted.
     download_files = ['examples', conf['model_pt']]
     for src in cache_dir.glob('*'):
         if re.search('|'.join(download_files), src.name):
             dst = save_dir / src.name
             try:
-                dst.unlink()
+                if dst.is_symlink() or dst.is_file():
+                    dst.unlink()
+                elif dst.is_dir():
+                    shutil.rmtree(dst)
             except FileNotFoundError:
                 pass
-            dst.symlink_to(src)
+            try:
+                dst.symlink_to(src, target_is_directory=src.is_dir())
+            except OSError:
+                if src.is_dir():
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
 
     pretrained_model = save_dir / conf['model_pt']
     pretrained_state = torch.load(pretrained_model, map_location='cpu')
