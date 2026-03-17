@@ -9,6 +9,21 @@ import random
 
 from speakerlab.utils.fileio import load_wav_scp
 
+
+def safe_load_audio(audio_path):
+    # Windows installations often expose only the soundfile backend, so avoid
+    # hard-coding "sox" when loading augmentation audio.
+    try:
+        return torchaudio.load(audio_path)
+    except Exception:
+        available_backends = torchaudio.list_audio_backends()
+        for backend in available_backends:
+            try:
+                return torchaudio.load(audio_path, backend=backend)
+            except Exception:
+                continue
+        raise
+
 def addreverb(wav, rir_wav):
     # wav: [T,], rir_wav: [T,]
     wav = wav.numpy()
@@ -81,12 +96,12 @@ class NoiseReverbCorrupter(object):
     def __call__(self, wav, fs=16000):
         if self.reverb_prob > random.random():
             reverb_path =  self.reverb_data[random.choice(self.reverb_data_keys)]
-            reverb, fs_rir = torchaudio.load(reverb_path, backend="sox")
+            reverb, fs_rir = safe_load_audio(reverb_path)
             assert fs_rir == fs
             wav = self.add_reverb(wav, reverb[0])
         if self.noise_prob > random.random():
             noise_path =  self.noise_data[random.choice(self.noise_data_keys)]
-            noise, fs_noise = torchaudio.load(noise_path)
+            noise, fs_noise = safe_load_audio(noise_path)
             assert fs_noise == fs
             wav = self.add_noise(
                 wav, noise[0],

@@ -22,6 +22,12 @@ parser.add_argument('--config', default='', type=str, help='Config file for trai
 parser.add_argument('--resume', default=True, type=bool, help='Resume from recent checkpoint or not')
 parser.add_argument('--seed', default=1234, type=int, help='Random seed for training.')
 parser.add_argument('--gpu', nargs='+', help='GPU id to use.')
+parser.add_argument(
+    '--init_model',
+    default='',
+    type=str,
+    help='Optional pretrained embedding model checkpoint used to initialize embedding_model before training.',
+)
 
 def main():
     args, overrides = parser.parse_known_args(sys.argv[1:])
@@ -81,6 +87,14 @@ def main():
 
     # model
     embedding_model = build('embedding_model', config)
+    if args.init_model:
+        # Fine-tuning reuses only the embedding network weights. The classifier
+        # is always rebuilt for the current training speaker set.
+        pretrained_state = torch.load(args.init_model, map_location='cpu')
+        load_msg = embedding_model.load_state_dict(pretrained_state, strict=False)
+        logger.info(f"Initialized embedding_model from {args.init_model}")
+        logger.info(f"Missing keys when loading init_model: {load_msg.missing_keys}")
+        logger.info(f"Unexpected keys when loading init_model: {load_msg.unexpected_keys}")
     if hasattr(config, 'speed_pertub') and config.speed_pertub:
         config.num_classes = len(config.label_encoder) * 3
     else:

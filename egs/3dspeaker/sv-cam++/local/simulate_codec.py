@@ -69,7 +69,7 @@ def build_ffmpeg_commands(input_wav: Path, output_wav: Path, codec: str, bitrate
         ]
     else:
         raise ValueError(f"Unsupported codec: {codec}")
-
+    
     # Decode back to wav because the downstream speaker model expects wav input.
     decode_cmd = [
         "ffmpeg", "-y", "-i", str(temp_file),
