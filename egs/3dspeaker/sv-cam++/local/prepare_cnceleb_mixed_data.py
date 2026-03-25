@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument("--clean_ratio", type=float, default=0.30, help="Fraction kept clean in mixed train set")
     parser.add_argument("--opus_ratio", type=float, default=0.30, help="Fraction encoded with Opus")
     parser.add_argument("--amrwb_ratio", type=float, default=0.20, help="Fraction encoded with AMR-WB")
+    parser.add_argument("--aac_ratio", type=float, default=0.00, help="Fraction encoded with AAC")
     parser.add_argument("--g711_ratio", type=float, default=0.20, help="Fraction encoded with G.711")
     parser.add_argument("--opus_bitrates", type=str, default="4k,6k,8k", help="Opus bitrate candidates")
     parser.add_argument(
@@ -39,6 +40,7 @@ def parse_args():
         default="8.85k,8.85k,8.85k,12.65k,23.85k",
         help="AMR-WB bitrate candidates. Repeat 8.85k to give it more weight.",
     )
+    parser.add_argument("--aac_bitrates", type=str, default="16k", help="AAC bitrate candidates")
     parser.add_argument(
         "--g711_variants",
         type=str,
@@ -264,12 +266,16 @@ def build_mixed_trainset(args, workspace_root: Path):
         str(args.opus_ratio),
         "--amrwb_ratio",
         str(args.amrwb_ratio),
+        "--aac_ratio",
+        str(args.aac_ratio),
         "--g711_ratio",
         str(args.g711_ratio),
         "--opus_bitrates",
         args.opus_bitrates,
         "--amrwb_bitrates",
         args.amrwb_bitrates,
+        "--aac_bitrates",
+        args.aac_bitrates,
         "--g711_variants",
         args.g711_variants,
     ]
