@@ -152,9 +152,12 @@ python egs\3dspeaker\sv-cam++\local\run_cnceleb_codec_sweep.py `
   --trials_file egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\trials\trials.lst `
   --model_bin pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
   --embedding_cache_root egs\3dspeaker\sv-cam++\exp\codec_bitrate_test\embedding_cache `
+  --stratified_sampling `
   --trial_sample_mode random `
   --trial_sample_seed 42 `
   --limit 2000 `
+  --target_limit 100 `
+  --nontarget_limit 1900 `
   --num_workers 4 `
   --report_csv egs\3dspeaker\sv-cam++\exp\codec_bitrate_test\smoke_report.csv `
   --report_json egs\3dspeaker\sv-cam++\exp\codec_bitrate_test\smoke_report.json `
@@ -170,7 +173,12 @@ python egs\3dspeaker\sv-cam++\local\run_cnceleb_codec_sweep.py `
   --trials_file egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\trials\trials.lst `
   --model_bin pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
   --embedding_cache_root egs\3dspeaker\sv-cam++\exp\codec_bitrate_test\embedding_cache `
-  --fraction 0.3 `
+  --stratified_sampling `
+  --trial_sample_mode random `
+  --trial_sample_seed 42 `
+  --limit 2000 `
+  --target_limit 100 `
+  --nontarget_limit 1900 `
   --num_workers 8 `
   --report_csv egs\3dspeaker\sv-cam++\exp\codec_bitrate_test\cnceleb_codec_report.csv `
   --report_json egs\3dspeaker\sv-cam++\exp\codec_bitrate_test\cnceleb_codec_report.json `
@@ -217,9 +225,12 @@ python egs\3dspeaker\sv-cam++\local\run_cnceleb_band_contribution.py `
   --low_range 1-26 `
   --mid_range 27-53 `
   --high_range 54-80 `
+  --stratified_sampling `
   --trial_sample_mode random `
   --trial_sample_seed 42 `
-  --limit 1000 `
+  --limit 2000 `
+  --target_limit 100 `
+  --nontarget_limit 1900 `
   --report_csv egs\3dspeaker\sv-cam++\exp\band_contribution\smoke_report.csv `
   --report_json egs\3dspeaker\sv-cam++\exp\band_contribution\smoke_report.json `
   --table_md egs\3dspeaker\sv-cam++\exp\band_contribution\smoke_table.md
@@ -239,7 +250,12 @@ python egs\3dspeaker\sv-cam++\local\run_cnceleb_band_contribution.py `
   --low_range 1-26 `
   --mid_range 27-53 `
   --high_range 54-80 `
-  --fraction 0.3 `
+  --stratified_sampling `
+  --trial_sample_mode random `
+  --trial_sample_seed 42 `
+  --limit 2000 `
+  --target_limit 100 `
+  --nontarget_limit 1900 `
   --report_csv egs\3dspeaker\sv-cam++\exp\band_contribution\band_contribution_report.csv `
   --report_json egs\3dspeaker\sv-cam++\exp\band_contribution\band_contribution_report.json `
   --table_md egs\3dspeaker\sv-cam++\exp\band_contribution\band_contribution_table.md
@@ -283,9 +299,12 @@ python egs\3dspeaker\sv-cam++\local\run_cnceleb_fbank_window_eval.py `
   --codec_conditions clean,opus@4k,opus@8k,amrwb@8.85k `
   --window_lengths_ms 25,20,15,10 `
   --fbank_shift_ms 10 `
+  --stratified_sampling `
   --trial_sample_mode random `
   --trial_sample_seed 42 `
-  --limit 1000 `
+  --limit 2000 `
+  --target_limit 100 `
+  --nontarget_limit 1900 `
   --report_csv egs\3dspeaker\sv-cam++\exp\fbank_window_eval\window_eval_report.csv `
   --report_json egs\3dspeaker\sv-cam++\exp\fbank_window_eval\window_eval_report.json `
   --table_md egs\3dspeaker\sv-cam++\exp\fbank_window_eval\window_eval_table.md
@@ -349,3 +368,65 @@ python egs\3dspeaker\sv-cam++\local\run_cnceleb_codec_fixedrate_eval.py `
 - 图像默认输出 3 张：`fixedrate_eer.png`、`fixedrate_min_dcf.png`、`fixedrate_relative_eer.png`
 - 脚本采用“在线编解码 + embedding 缓存”，不会落地保存整套 degraded wav
 - 如果需要强制重算 embedding 缓存，增加 `--overwrite_embeddings`
+## CN-Celeb 固定码率 codec 微调与评测（CAM++）
+### 脚本
+
+- `egs\3dspeaker\sv-cam++\local\run_cnceleb_codec_fixedrate_finetune.py`
+- `egs\3dspeaker\sv-cam++\conf\cam++_cnceleb_codec16k_ft.yaml`
+
+### 用途
+- 构建 `clean + opus@16k + aac@16k + amrwb@15.85k` 的混合训练集
+- 从 `pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin` 初始化 CAM++ 做微调
+- 训练前先跑一份预训练模型基线评测，训练结束后再跑微调后评测
+- 自动生成“预训练 vs 微调后”的对比 CSV、Markdown 和柱状图
+
+### 推荐命令
+```powershell
+python egs\3dspeaker\sv-cam++\local\run_cnceleb_codec_fixedrate_finetune.py `
+  --train_wav_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\clean_train\wav.scp `
+  --train_utt2spk egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\clean_train\utt2spk `
+  --test_wav_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\test\wav.scp `
+  --trials_file egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\trials\trials.lst `
+  --noise_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\musan\wav.scp `
+  --reverb_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\rirs\wav.scp `
+  --train_config egs\3dspeaker\sv-cam++\conf\cam++_cnceleb_codec16k_ft.yaml `
+  --init_model pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
+  --mixed_train_dir egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb_fixedrate_mixed\train `
+  --mixed_audio_root egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb_fixedrate_mixed_audio `
+  --exp_dir egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft `
+  --baseline_embedding_cache_root egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\baseline_embedding_cache `
+  --baseline_report_csv egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\pretrained_report.csv `
+  --baseline_report_json egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\pretrained_report.json `
+  --baseline_table_md egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\pretrained_report.md `
+  --baseline_plot_dir egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\pretrained_plots `
+  --eval_embedding_cache_root egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\embedding_cache `
+  --eval_report_csv egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\report.csv `
+  --eval_report_json egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\report.json `
+  --eval_table_md egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\report.md `
+  --eval_plot_dir egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\plots `
+  --compare_csv egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\compare_pretrained_vs_finetuned.csv `
+  --compare_md egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\compare_pretrained_vs_finetuned.md `
+  --compare_plot_dir egs\3dspeaker\sv-cam++\exp\campp_cnceleb_codec16k_ft_eval\compare_plots `
+  --clean_ratio 0.25 `
+  --opus_ratio 0.25 `
+  --aac_ratio 0.25 `
+  --amrwb_ratio 0.25 `
+  --g711_ratio 0.0 `
+  --opus_bitrates 16k `
+  --aac_bitrates 16k `
+  --amrwb_bitrates 15.85k `
+  --gpus 0 `
+  --limit 2000 `
+  --target_limit 100 `
+  --nontarget_limit 1900
+```
+
+### 注意事项
+- 这个脚本会先生成混合训练音频，再启动训练，最后自动评测；耗时明显长于单独评测脚本
+- 评测阶段默认复用 `run_cnceleb_codec_fixedrate_eval.py` 的协议：`clean,opus@16k,aac@16k,amrwb@15.85k`
+- 训练前会先输出预训练基线结果：`pretrained_report.csv/json/md` 和 `pretrained_plots\`
+- 训练后会输出微调结果：`report.csv/json/md` 和 `plots\`
+- 对比结果会额外输出：`compare_pretrained_vs_finetuned.csv`、`compare_pretrained_vs_finetuned.md`、`compare_plots\`
+- 训练阶段实际加载的是 fine-tune 目录下最新 checkpoint 的 `embedding_model.ckpt`
+- 如果要只重跑评测，可加 `--skip_train`
+- 如果要强制重建混合训练音频，可加 `--overwrite_data`

@@ -56,6 +56,12 @@ def parse_args():
         help="Fraction encoded with AMR-WB",
     )
     parser.add_argument(
+        "--aac_ratio",
+        type=float,
+        default=0.00,
+        help="Fraction encoded with AAC",
+    )
+    parser.add_argument(
         "--g711_ratio",
         type=float,
         default=0.20,
@@ -72,6 +78,12 @@ def parse_args():
         type=str,
         default="8.85k,8.85k,8.85k,12.65k,23.85k",
         help="Comma-separated AMR-WB bitrate candidates. Repeating 8.85k increases its sampling probability.",
+    )
+    parser.add_argument(
+        "--aac_bitrates",
+        type=str,
+        default="16k",
+        help="Comma-separated AAC bitrate candidates",
     )
     parser.add_argument(
         "--g711_variants",
@@ -139,6 +151,9 @@ def choose_condition(index, counts):
     index -= counts["opus"]
     if index < counts["amrwb"]:
         return "amrwb"
+    index -= counts["amrwb"]
+    if index < counts["aac"]:
+        return "aac"
     return "g711"
 
 
@@ -147,17 +162,20 @@ def build_assignment(entries, args):
     clean_count = int(total * args.clean_ratio)
     opus_count = int(total * args.opus_ratio)
     amrwb_count = int(total * args.amrwb_ratio)
-    g711_count = total - clean_count - opus_count - amrwb_count
+    aac_count = int(total * args.aac_ratio)
+    g711_count = total - clean_count - opus_count - amrwb_count - aac_count
 
     counts = {
         "clean": clean_count,
         "opus": opus_count,
         "amrwb": amrwb_count,
+        "aac": aac_count,
         "g711": g711_count,
     }
 
     opus_bitrates = [item.strip() for item in args.opus_bitrates.split(",") if item.strip()]
     amrwb_bitrates = [item.strip() for item in args.amrwb_bitrates.split(",") if item.strip()]
+    aac_bitrates = [item.strip() for item in args.aac_bitrates.split(",") if item.strip()]
     g711_variants = [item.strip() for item in args.g711_variants.split(",") if item.strip()]
 
     assignments = []
@@ -172,6 +190,9 @@ def build_assignment(entries, args):
         elif condition == "amrwb":
             codec = "amrwb"
             bitrate = random.choice(amrwb_bitrates)
+        elif condition == "aac":
+            codec = "aac"
+            bitrate = random.choice(aac_bitrates)
         elif condition == "g711":
             codec = random.choice(g711_variants)
             bitrate = "8k"
@@ -262,9 +283,9 @@ def main():
     args = parse_args()
     random.seed(args.seed)
 
-    total_ratio = args.clean_ratio + args.opus_ratio + args.amrwb_ratio + args.g711_ratio
+    total_ratio = args.clean_ratio + args.opus_ratio + args.amrwb_ratio + args.aac_ratio + args.g711_ratio
     if abs(total_ratio - 1.0) > 1e-6:
-        raise ValueError("clean_ratio + opus_ratio + amrwb_ratio + g711_ratio must equal 1.0")
+        raise ValueError("clean_ratio + opus_ratio + amrwb_ratio + aac_ratio + g711_ratio must equal 1.0")
 
     input_wav_scp = Path(args.input_wav_scp).resolve()
     input_utt2spk = Path(args.input_utt2spk).resolve()
@@ -326,6 +347,7 @@ def main():
     print(f"Clean: {stats['clean']}")
     print(f"Opus: {stats['opus']}")
     print(f"AMR-WB: {stats['amrwb']}")
+    print(f"AAC: {stats['aac']}")
     print(f"G.711: {stats['g711']}")
 
 

@@ -106,6 +106,11 @@ def parse_args():
     parser.add_argument("--fraction", type=float, default=1.0, help="Use fraction of trials before limit")
     parser.add_argument("--limit", type=int, default=0, help="Use first N (head mode) or sampled N (random mode) trials")
     parser.add_argument(
+        "--stratified_sampling",
+        action="store_true",
+        help="Enable label-stratified trial sampling. Use together with --target_limit and --nontarget_limit for explicit per-class control.",
+    )
+    parser.add_argument(
         "--trial_sample_mode",
         type=str,
         choices=["head", "random"],
@@ -119,6 +124,8 @@ def parse_args():
         help="Random seed used when --trial_sample_mode=random",
     )
     parser.add_argument("--overwrite_embeddings", action="store_true", help="Overwrite cached embeddings")
+    parser.add_argument("--target_limit", type=int, default=0, help="Optional explicit cap on target trials after stratified sampling")
+    parser.add_argument("--nontarget_limit", type=int, default=0, help="Optional explicit cap on nontarget trials after stratified sampling")
 
     parser.add_argument("--p_target", type=float, default=0.01, help="p_target in minDCF")
     parser.add_argument("--c_miss", type=float, default=1.0, help="c_miss in minDCF")
@@ -187,6 +194,79 @@ def load_trials(trials_file: Path, fraction: float, limit: int, sample_mode: str
     chosen_idx = rng.sample(population, target)
     chosen_idx.sort()
     return [lines[i] for i in chosen_idx]
+
+
+def label_to_binary(label: str):
+    return 1 if label in ("1", "target") else 0
+
+
+def pick_records(records, count: int, sample_mode: str, rng: random.Random):
+    if count <= 0 or not records:
+        return []
+    count = min(count, len(records))
+    if sample_mode == "head":
+        return records[:count]
+    chosen = rng.sample(records, count)
+    chosen.sort(key=lambda rec: rec["index"])
+    return chosen
+
+
+def load_trials_stratified(
+    trials_file: Path,
+    fraction: float,
+    limit: int,
+    sample_mode: str,
+    sample_seed: int,
+    target_limit: int,
+    nontarget_limit: int,
+):
+    if not 0 < fraction <= 1.0:
+        raise ValueError("--fraction must be in (0, 1].")
+    if limit < 0:
+        raise ValueError("--limit must be >= 0.")
+    if target_limit < 0 or nontarget_limit < 0:
+        raise ValueError("--target_limit and --nontarget_limit must be >= 0.")
+
+    raw_lines = [line.strip() for line in trials_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    indexed = []
+    for idx, line in enumerate(raw_lines):
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        indexed.append({"index": idx, "line": line, "label": parts[2]})
+
+    targets = [rec for rec in indexed if label_to_binary(rec["label"]) == 1]
+    nontargets = [rec for rec in indexed if label_to_binary(rec["label"]) == 0]
+
+    if fraction < 1.0:
+        target_keep = min(len(targets), max(1, int(len(targets) * fraction))) if targets else 0
+        nontarget_keep = min(len(nontargets), max(1, int(len(nontargets) * fraction))) if nontargets else 0
+    else:
+        target_keep = len(targets)
+        nontarget_keep = len(nontargets)
+
+    rng = random.Random(sample_seed)
+    frac_targets = pick_records(targets, target_keep, sample_mode, rng)
+    frac_nontargets = pick_records(nontargets, nontarget_keep, sample_mode, rng)
+
+    if target_limit > 0 or nontarget_limit > 0:
+        chosen_targets = frac_targets if target_limit <= 0 else pick_records(frac_targets, target_limit, sample_mode, rng)
+        chosen_nontargets = (
+            frac_nontargets if nontarget_limit <= 0 else pick_records(frac_nontargets, nontarget_limit, sample_mode, rng)
+        )
+        selected = chosen_targets + chosen_nontargets
+        if limit > 0 and len(selected) > limit:
+            raise ValueError(
+                "The sum of stratified class limits exceeds --limit. "
+                "Reduce --target_limit/--nontarget_limit or increase --limit."
+            )
+    else:
+        selected = frac_targets + frac_nontargets
+        if limit > 0:
+            selected = pick_records(selected, limit, sample_mode, rng)
+
+    selected.sort(key=lambda rec: rec["index"])
+    return [rec["line"] for rec in selected]
 
 
 def normalize_trial_utt_key(token: str):
@@ -478,7 +558,7 @@ def score_trials(parsed_trials, embeddings):
         v1 = embeddings[utt1]
         v2 = embeddings[utt2]
         scores.append(float(np.dot(v1, v2)))
-        labels.append(1 if label in ("1", "target") else 0)
+        labels.append(label_to_binary(label))
     return np.array(labels), np.array(scores)
 
 
@@ -668,15 +748,26 @@ def main():
     embedding_cache_root.mkdir(parents=True, exist_ok=True)
 
     wav_map = load_wavscp(test_wav_scp)
-    trial_lines = load_trials(
-        trials_file=trials_file,
-        fraction=args.fraction,
-        limit=args.limit,
-        sample_mode=args.trial_sample_mode,
-        sample_seed=args.trial_sample_seed,
-    )
+    if args.stratified_sampling:
+        trial_lines = load_trials_stratified(
+            trials_file=trials_file,
+            fraction=args.fraction,
+            limit=args.limit,
+            sample_mode=args.trial_sample_mode,
+            sample_seed=args.trial_sample_seed,
+            target_limit=args.target_limit,
+            nontarget_limit=args.nontarget_limit,
+        )
+    else:
+        trial_lines = load_trials(
+            trials_file=trials_file,
+            fraction=args.fraction,
+            limit=args.limit,
+            sample_mode=args.trial_sample_mode,
+            sample_seed=args.trial_sample_seed,
+        )
     print(
-        f"Trial selection: mode={args.trial_sample_mode}, fraction={args.fraction}, "
+        f"Trial selection: mode={args.trial_sample_mode}, stratified={args.stratified_sampling}, fraction={args.fraction}, "
         f"limit={args.limit}, seed={args.trial_sample_seed}, selected={len(trial_lines)}"
     )
     parsed_trials = parse_trials_records(trial_lines)

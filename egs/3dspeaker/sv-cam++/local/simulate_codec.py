@@ -12,7 +12,7 @@ def parse_args():
         "--codec",
         type=str,
         default="opus",
-        choices=["opus", "g711_mulaw", "g711_alaw", "amrwb"],
+        choices=["opus", "g711_mulaw", "g711_alaw", "amrwb", "aac"],
         help="Codec to simulate",
     )
     parser.add_argument("--bitrate", type=str, default="8k", help="Target codec bitrate, e.g. 8k")
@@ -66,6 +66,12 @@ def build_ffmpeg_commands(input_wav: Path, output_wav: Path, codec: str, bitrate
         encode_cmd = [
             "ffmpeg", "-y", "-i", str(input_wav),
             "-ar", "16000", "-ac", "1", "-c:a", "libvo_amrwbenc", "-b:a", bitrate, "-f", "amr", str(temp_file)
+        ]
+    elif codec == "aac":
+        temp_file = output_wav.with_suffix(".m4a")
+        encode_cmd = [
+            "ffmpeg", "-y", "-i", str(input_wav),
+            "-ar", "16000", "-ac", "1", "-c:a", "aac", "-b:a", bitrate, str(temp_file)
         ]
     else:
         raise ValueError(f"Unsupported codec: {codec}")
