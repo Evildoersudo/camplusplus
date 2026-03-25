@@ -2,40 +2,54 @@
 
 ## 1. 文档用途
 
-本文档用于记录当前项目在 Linux GPU 服务器上的常用运行命令，方便后续重复调试、训练、续训与评测。
+本文档记录当前项目在 Linux GPU 服务器上的常用运行命令，目标是让仓库可以在不同机器上直接复用，而不依赖固定的机器路径。
 
-当前机器的约束是：
+默认做法：
 
-- 代码只能放在：`/root/my_project/camplusplus`
-- 数据、解压结果、混合音频、训练输出都应放在：`/root/autodl-tmp`
-
-因此本文档统一采用“代码和数据完全分离”的运行方式。
+- 仓库路径不写死，统一用 `PROJECT_ROOT`
+- 数据、实验输出、预训练权重等运行时目录统一放在 `PROJECT_ROOT` 下的相对目录
+- 如果你想把大文件放到别处，只需要改开头的环境变量，不需要改后面的命令
 
 ## 2. 路径约定
 
-建议固定使用以下目录：
-
-- 项目根目录：`/root/my_project/camplusplus`
-- 下载数据目录：`/root/autodl-tmp/download_data`
-- 数据工作区根目录：`/root/autodl-tmp/camplusplus_data`
-- 训练输出根目录：`/root/autodl-tmp/camplusplus_exp`
-- 预训练模型目录：`/root/autodl-tmp/pretrained`
-
-建议先手动创建：
+先进入仓库根目录，然后统一导出路径变量：
 
 ```bash
-mkdir -p /root/autodl-tmp/download_data
-mkdir -p /root/autodl-tmp/camplusplus_data
-mkdir -p /root/autodl-tmp/camplusplus_exp
-mkdir -p /root/autodl-tmp/pretrained
+cd "$(git rev-parse --show-toplevel)"
+
+export PROJECT_ROOT="$(pwd)"
+export WORKSPACE_ROOT="../camplusplus_runtime"
+export DOWNLOAD_DIR="${WORKSPACE_ROOT}/download_data"
+export DATA_ROOT="${WORKSPACE_ROOT}/camplusplus_data"
+export EXP_ROOT="${WORKSPACE_ROOT}/camplusplus_exp"
+export PRETRAINED_ROOT="${WORKSPACE_ROOT}/pretrained"
+export RECIPE_DIR="${PROJECT_ROOT}/egs/3dspeaker/sv-cam++"
+export WORKSPACE_NAME="CN_celeb_database"
 ```
+
+建议先创建这些目录：
+
+```bash
+mkdir -p "${DOWNLOAD_DIR}"
+mkdir -p "${DATA_ROOT}"
+mkdir -p "${EXP_ROOT}"
+mkdir -p "${PRETRAINED_ROOT}"
+```
+
+如果你的服务器不适合把大文件放在仓库目录内，只需要把 `WORKSPACE_ROOT` 改成你自己的挂载目录，例如：
+
+```bash
+export WORKSPACE_ROOT="../camplusplus_runtime"
+```
+
+后面的命令不用再改。
 
 ## 3. 环境准备
 
 ### 3.1 进入项目目录
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 ```
 
 ### 3.2 创建 Python 环境
@@ -88,20 +102,18 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 
 ### 4.2 生成混合训练数据
 
-注意：这里的 `data_root` 和 `raw_root` 都放到 `/root/autodl-tmp`。
+注意：这里的 `data_root` 和 `raw_root` 都基于前面定义的相对目录变量。
 
-#### 4.2.1 首次全量生成（覆盖模式）
-
-使用 `--overwrite` 会强制重生成已存在的 degraded 音频，适合首次跑或你确认要全量重做。
+#### 4.2.1 首次全量生成
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
-python egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py \
-  --download_dir /root/autodl-tmp/download_data \
-  --data_root /root/autodl-tmp/camplusplus_data \
-  --workspace_name CN_celeb_database \
-  --raw_root /root/autodl-tmp/camplusplus_data/raw_data \
+python "${RECIPE_DIR}/local/prepare_cnceleb_mixed_data.py" \
+  --download_dir "${DOWNLOAD_DIR}" \
+  --data_root "${DATA_ROOT}" \
+  --workspace_name "${WORKSPACE_NAME}" \
+  --raw_root "${DATA_ROOT}/raw_data" \
   --clean_ratio 0.3 \
   --opus_ratio 0.3 \
   --amrwb_ratio 0.2 \
@@ -115,18 +127,18 @@ python egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py \
   --overwrite
 ```
 
-#### 4.2.2 意外中断后续跑（推荐）
+#### 4.2.2 意外中断后续跑
 
 如果 mixed codec 音频已经生成了一部分，续跑时去掉 `--overwrite`，脚本会复用已存在文件，只补齐缺失部分。
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
-python egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py \
-  --download_dir /root/autodl-tmp/download_data \
-  --data_root /root/autodl-tmp/camplusplus_data \
-  --workspace_name CN_celeb_database \
-  --raw_root /root/autodl-tmp/camplusplus_data/raw_data \
+python "${RECIPE_DIR}/local/prepare_cnceleb_mixed_data.py" \
+  --download_dir "${DOWNLOAD_DIR}" \
+  --data_root "${DATA_ROOT}" \
+  --workspace_name "${WORKSPACE_NAME}" \
+  --raw_root "${DATA_ROOT}/raw_data" \
   --clean_ratio 0.3 \
   --opus_ratio 0.3 \
   --amrwb_ratio 0.2 \
@@ -143,36 +155,29 @@ python egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py \
 
 - 保持 `clean_ratio / opus_ratio / amrwb_ratio / g711_ratio` 不变
 - 保持 `opus_bitrates / amrwb_bitrates / g711_variants` 不变
-- 保持 `seed` 不变（默认是 42）
+- 保持 `seed` 不变（默认 42）
 
 可用下面命令快速查看当前 mixed 音频数量：
 
 ```bash
-find /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed_audio -name "*.wav" | wc -l
+find "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed_audio" -name "*.wav" | wc -l
 ```
 
 ### 4.3 生成后的关键目录
 
-- Clean 训练集：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/clean_train`
-- Mixed 训练集：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train`
-- Mixed 音频根目录：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed_audio`
-- 测试集：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/test`
-- Trials：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/trials`
-- MUSAN：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/musan/wav.scp`
-- RIRS：
-  - `/root/autodl-tmp/camplusplus_data/CN_celeb_database/rirs/wav.scp`
+- Clean 训练集：`${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/clean_train`
+- Mixed 训练集：`${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train`
+- Mixed 音频根目录：`${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed_audio`
+- 测试集：`${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/test`
+- Trials：`${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/trials`
+- MUSAN：`${DATA_ROOT}/${WORKSPACE_NAME}/musan/wav.scp`
+- RIRS：`${DATA_ROOT}/${WORKSPACE_NAME}/rirs/wav.scp`
 
 ### 4.4 从本地上传已生成数据后的路径修复
 
 如果你在本地已经生成了 `CN_celeb_database`，再打包上传到服务器，这个方案完全可行。
 
-需要额外做的一步是：把索引文件中的本地绝对路径批量改成服务器路径。
+需要额外做的一步是：把索引文件中的旧绝对路径批量改成当前服务器上的运行路径。
 
 #### 4.4.1 典型需要改写的文件
 
@@ -188,82 +193,84 @@ find /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed_audio -na
 - `utt2spk` 和 `spk2utt` 不含文件路径，一般不需要改
 - `train.csv` 只需要改 `path` 列
 
-#### 4.4.2 一键改写脚本（推荐）
+#### 4.4.2 一键改写脚本
 
-下面脚本会把 Windows 路径前缀映射到服务器路径，并统一路径分隔符为 `/`。
+下面脚本不会依赖固定的 Windows 盘符或固定的 Linux 根目录，而是根据当前仓库和工作区变量生成映射。
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python - <<'PY'
 from pathlib import Path
 import csv
+import os
 
-base = Path('/root/autodl-tmp/camplusplus_data/CN_celeb_database')
+project_root = Path(os.environ["PROJECT_ROOT"]).resolve()
+data_root = Path(os.environ["DATA_ROOT"]).resolve()
+workspace_name = os.environ.get("WORKSPACE_NAME", "CN_celeb_database")
+base = data_root / workspace_name
 
-# 按你的本地实际路径调整旧前缀（可保留多个候选）
-prefix_map = {
-  'E:/Speaker_recognition/Graduation_Project/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data': '/root/autodl-tmp/camplusplus_data/raw_data',
-  'E:/Speaker_recognition/Graduation_Project/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database': '/root/autodl-tmp/camplusplus_data/CN_celeb_database',
+old_prefix_candidates = {
+    (project_root / "egs/3dspeaker/sv-cam++/data/raw_data").as_posix(): (data_root / "raw_data").as_posix(),
+    (project_root / "egs/3dspeaker/sv-cam++/data/CN_celeb_database").as_posix(): base.as_posix(),
 }
 
 wav_scp_files = [
-  base / 'cnceleb/clean_train/wav.scp',
-  base / 'cnceleb/test/wav.scp',
-  base / 'cnceleb_mixed/train/wav.scp',
-  base / 'musan/wav.scp',
-  base / 'rirs/wav.scp',
+    base / "cnceleb/clean_train/wav.scp",
+    base / "cnceleb/test/wav.scp",
+    base / "cnceleb_mixed/train/wav.scp",
+    base / "musan/wav.scp",
+    base / "rirs/wav.scp",
 ]
-train_csv = base / 'cnceleb_mixed/train/train.csv'
+train_csv = base / "cnceleb_mixed/train/train.csv"
 
 def rewrite_path(path: str) -> str:
-  p = path.replace('\\\\', '/')
-  for old, new in prefix_map.items():
-    old_norm = old.replace('\\\\', '/')
-    if p.startswith(old_norm):
-      return new + p[len(old_norm):]
-  return p
+    p = path.replace("\\\\", "/")
+    for old, new in old_prefix_candidates.items():
+        if p.startswith(old):
+            return new + p[len(old):]
+    return p
 
 for f in wav_scp_files:
-  if not f.exists():
-    continue
-  out = []
-  with f.open('r', encoding='utf-8') as fin:
-    for line in fin:
-      line = line.strip()
-      if not line:
+    if not f.exists():
         continue
-      utt, path = line.split(maxsplit=1)
-      out.append(f"{utt} {rewrite_path(path)}")
-  with f.open('w', encoding='utf-8', newline='\n') as fout:
-    fout.write('\n'.join(out) + ('\n' if out else ''))
-  print(f'rewritten wav.scp: {f}')
+    out = []
+    with f.open("r", encoding="utf-8") as fin:
+        for line in fin:
+            line = line.strip()
+            if not line:
+                continue
+            utt, path = line.split(maxsplit=1)
+            out.append(f"{utt} {rewrite_path(path)}")
+    with f.open("w", encoding="utf-8", newline="\n") as fout:
+        fout.write("\n".join(out) + ("\n" if out else ""))
+    print(f"rewritten wav.scp: {f}")
 
 if train_csv.exists():
-  rows = []
-  with train_csv.open('r', encoding='utf-8', newline='') as fin:
-    reader = csv.reader(fin)
-    header = next(reader)
-    rows.append(header)
-    path_idx = header.index('path')
-    for row in reader:
-      row[path_idx] = rewrite_path(row[path_idx])
-      rows.append(row)
-  with train_csv.open('w', encoding='utf-8', newline='') as fout:
-    writer = csv.writer(fout)
-    writer.writerows(rows)
-  print(f'rewritten train.csv: {train_csv}')
+    rows = []
+    with train_csv.open("r", encoding="utf-8", newline="") as fin:
+        reader = csv.reader(fin)
+        header = next(reader)
+        rows.append(header)
+        path_idx = header.index("path")
+        for row in reader:
+            row[path_idx] = rewrite_path(row[path_idx])
+            rows.append(row)
+    with train_csv.open("w", encoding="utf-8", newline="") as fout:
+        writer = csv.writer(fout)
+        writer.writerows(rows)
+    print(f"rewritten train.csv: {train_csv}")
 PY
 ```
 
 #### 4.4.3 改写后快速自检
 
 ```bash
-head -n 3 /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train/wav.scp
-head -n 3 /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train/train.csv
+head -n 3 "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train/wav.scp"
+head -n 3 "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train/train.csv"
 ```
 
-如果输出路径都以 `/root/autodl-tmp/...` 开头，说明索引修复完成。
+如果输出路径都已经切到当前 `${DATA_ROOT}` 下，说明索引修复完成。
 
 ## 5. 训练配置建议
 
@@ -290,11 +297,9 @@ aug_prob: 0.8
 
 ## 6. 预训练模型存放建议
 
-为了避免占用代码目录空间，建议把预训练权重也放在 `/root/autodl-tmp`。
+建议把预训练权重放在 `${PRETRAINED_ROOT}` 下，例如：
 
-例如：
-
-- `/root/autodl-tmp/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin`
+- `${PRETRAINED_ROOT}/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin`
 
 该权重对应：
 
@@ -308,20 +313,18 @@ aug_prob: 0.8
 
 ### 7.1 Mixed 数据微调
 
-训练输出目录也放在 `/root/autodl-tmp/camplusplus_exp`。
-
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python -m speakerlab.bin.train \
-  --config /root/my_project/camplusplus/egs/3dspeaker/sv-cam++/conf/cam++.yaml \
+  --config "${RECIPE_DIR}/conf/cam++.yaml" \
   --gpu 0 \
-  --init_model /root/autodl-tmp/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --data /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train/train.csv \
-  --noise /root/autodl-tmp/camplusplus_data/CN_celeb_database/musan/wav.scp \
-  --reverb /root/autodl-tmp/camplusplus_data/CN_celeb_database/rirs/wav.scp \
+  --init_model "${PRETRAINED_ROOT}/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin" \
+  --data "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train/train.csv" \
+  --noise "${DATA_ROOT}/${WORKSPACE_NAME}/musan/wav.scp" \
+  --reverb "${DATA_ROOT}/${WORKSPACE_NAME}/rirs/wav.scp" \
   --aug_prob 0.8 \
-  --exp_dir /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft
+  --exp_dir "${EXP_ROOT}/campp_cnceleb_mixed_ft"
 ```
 
 ### 7.2 Clean 数据微调
@@ -329,24 +332,24 @@ python -m speakerlab.bin.train \
 如果你要做对照实验，只用 clean 训练集：
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python -m speakerlab.bin.train \
-  --config /root/my_project/camplusplus/egs/3dspeaker/sv-cam++/conf/cam++.yaml \
+  --config "${RECIPE_DIR}/conf/cam++.yaml" \
   --gpu 0 \
-  --init_model /root/autodl-tmp/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --data /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/clean_train/train.csv \
-  --noise /root/autodl-tmp/camplusplus_data/CN_celeb_database/musan/wav.scp \
-  --reverb /root/autodl-tmp/camplusplus_data/CN_celeb_database/rirs/wav.scp \
+  --init_model "${PRETRAINED_ROOT}/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin" \
+  --data "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/clean_train/train.csv" \
+  --noise "${DATA_ROOT}/${WORKSPACE_NAME}/musan/wav.scp" \
+  --reverb "${DATA_ROOT}/${WORKSPACE_NAME}/rirs/wav.scp" \
   --aug_prob 0.8 \
-  --exp_dir /root/autodl-tmp/camplusplus_exp/campp_cnceleb_clean_ft
+  --exp_dir "${EXP_ROOT}/campp_cnceleb_clean_ft"
 ```
 
 ## 8. 断点续训
 
 当前训练脚本支持自动续训。
 
-只要重新执行**相同的训练命令**，并保持：
+只要重新执行相同的训练命令，并保持：
 
 - `exp_dir` 不变
 
@@ -355,17 +358,17 @@ python -m speakerlab.bin.train \
 例如：
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python -m speakerlab.bin.train \
-  --config /root/my_project/camplusplus/egs/3dspeaker/sv-cam++/conf/cam++.yaml \
+  --config "${RECIPE_DIR}/conf/cam++.yaml" \
   --gpu 0 \
-  --init_model /root/autodl-tmp/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --data /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train/train.csv \
-  --noise /root/autodl-tmp/camplusplus_data/CN_celeb_database/musan/wav.scp \
-  --reverb /root/autodl-tmp/camplusplus_data/CN_celeb_database/rirs/wav.scp \
+  --init_model "${PRETRAINED_ROOT}/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin" \
+  --data "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train/train.csv" \
+  --noise "${DATA_ROOT}/${WORKSPACE_NAME}/musan/wav.scp" \
+  --reverb "${DATA_ROOT}/${WORKSPACE_NAME}/rirs/wav.scp" \
   --aug_prob 0.8 \
-  --exp_dir /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft
+  --exp_dir "${EXP_ROOT}/campp_cnceleb_mixed_ft"
 ```
 
 ## 9. 提取测试集 embedding
@@ -373,11 +376,11 @@ python -m speakerlab.bin.train \
 训练完成后先提取测试集 embedding：
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python -m speakerlab.bin.extract \
-  --exp_dir /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft \
-  --data /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/test/wav.scp \
+  --exp_dir "${EXP_ROOT}/campp_cnceleb_mixed_ft" \
+  --data "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/test/wav.scp" \
   --use_gpu \
   --gpu 0
 ```
@@ -385,11 +388,11 @@ python -m speakerlab.bin.extract \
 如果是 clean 对照模型，则改成：
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python -m speakerlab.bin.extract \
-  --exp_dir /root/autodl-tmp/camplusplus_exp/campp_cnceleb_clean_ft \
-  --data /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/test/wav.scp \
+  --exp_dir "${EXP_ROOT}/campp_cnceleb_clean_ft" \
+  --data "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/test/wav.scp" \
   --use_gpu \
   --gpu 0
 ```
@@ -399,19 +402,19 @@ python -m speakerlab.bin.extract \
 先进入 trials 目录看有哪些官方协议文件：
 
 ```bash
-ls /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/trials
+ls "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/trials"
 ```
 
 然后选择实际使用的 trial 文件，例如：
 
 ```bash
-cd /root/my_project/camplusplus
+cd "${PROJECT_ROOT}"
 
 python -m speakerlab.bin.compute_score_metrics \
-  --enrol_data /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft/embeddings \
-  --test_data /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft/embeddings \
-  --scores_dir /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft/scores \
-  --trials /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb/trials/<trial_file>
+  --enrol_data "${EXP_ROOT}/campp_cnceleb_mixed_ft/embeddings" \
+  --test_data "${EXP_ROOT}/campp_cnceleb_mixed_ft/embeddings" \
+  --scores_dir "${EXP_ROOT}/campp_cnceleb_mixed_ft/scores" \
+  --trials "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb/trials/<trial_file>"
 ```
 
 ## 11. 常用检查命令
@@ -419,25 +422,25 @@ python -m speakerlab.bin.compute_score_metrics \
 ### 11.1 检查训练集文件是否生成
 
 ```bash
-ls /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train
+ls "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train"
 ```
 
 ### 11.2 检查 train.csv 行数
 
 ```bash
-wc -l /root/autodl-tmp/camplusplus_data/CN_celeb_database/cnceleb_mixed/train/train.csv
+wc -l "${DATA_ROOT}/${WORKSPACE_NAME}/cnceleb_mixed/train/train.csv"
 ```
 
 ### 11.3 检查 checkpoint 是否保存
 
 ```bash
-ls /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft/models
+ls "${EXP_ROOT}/campp_cnceleb_mixed_ft/models"
 ```
 
 ### 11.4 查看训练日志
 
 ```bash
-tail -f /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft/train.log
+tail -f "${EXP_ROOT}/campp_cnceleb_mixed_ft/train.log"
 ```
 
 ## 12. 推荐实验顺序
@@ -456,17 +459,8 @@ tail -f /root/autodl-tmp/camplusplus_exp/campp_cnceleb_mixed_ft/train.log
 
 ## 13. 关键原则
 
-在这台服务器上，后续都按下面的原则执行：
+后续都按下面的原则执行：
 
-- `/root/my_project/camplusplus` 只放代码
-- `/root/autodl-tmp` 放：
-  - 下载数据
-  - 解压数据
-  - mixed 音频
-  - 训练索引
-  - checkpoint
-  - embeddings
-  - scores
-  - 预训练模型
-
-不要把大文件写回代码目录，否则很快会占满系统盘。
+- 仓库内只保留代码、配置和文档
+- 运行时数据路径全部通过变量控制
+- 需要迁移机器时，只改第 2 节的变量定义，不改正文命令

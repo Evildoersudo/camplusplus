@@ -4,7 +4,7 @@
 
 适用范围：
 
-- 当前仓库：`E:\Speaker_recognition\Graduation_Project\camplusplus`
+- 当前仓库：仓库根目录 `./`
 - 当前 recipe：`egs/3dspeaker/sv-cam++`
 - 当前主任务：基于 CAM++ 的说话人验证（speaker verification）
 

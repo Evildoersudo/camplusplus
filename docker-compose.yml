@@ -1,0 +1,29 @@
+services:
+  camplusplus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nvcr.io/nvidia/pytorch:24.08-py3
+    image: camplusplus:latest
+    container_name: camplusplus
+    working_dir: /workspace/camplusplus
+    stdin_open: true
+    tty: true
+    init: true
+    shm_size: "16gb"
+    gpus: all
+    platform: linux/arm64
+    environment:
+      PYTHONPATH: /workspace/camplusplus
+      PROJECT_ROOT: /workspace/camplusplus
+      WORKSPACE_ROOT: /workspace/runtime
+      DOWNLOAD_DIR: /workspace/runtime/download_data
+      DATA_ROOT: /workspace/runtime/camplusplus_data
+      EXP_ROOT: /workspace/runtime/camplusplus_exp
+      PRETRAINED_ROOT: /workspace/runtime/pretrained
+      WORKSPACE_NAME: CN_celeb_database
+    volumes:
+      - .:/workspace/camplusplus
+      - ../camplusplus_runtime:/workspace/runtime
+    command: /bin/bash

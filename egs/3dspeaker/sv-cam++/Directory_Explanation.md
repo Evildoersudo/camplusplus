@@ -1,6 +1,6 @@
 # `sv-cam++` 目录说明
 
-本文档用于解释 [run.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/run.sh) 以及 `egs/3dspeaker/sv-cam++` 目录下各文件的作用，方便后续作为毕业设计中的 `CAM++ baseline` 工程入口。
+本文档用于解释 [run.sh](./run.sh) 以及 `egs/3dspeaker/sv-cam++` 目录下各文件的作用，方便后续作为毕业设计中的 `CAM++ baseline` 工程入口。
 
 ## 1. 目录定位
 
@@ -41,7 +41,7 @@
 ## 3. `run.sh` 详细解读
 
 文件位置：
-[run.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/run.sh)
+[run.sh](./run.sh)
 
 这个脚本是整个 baseline 的总入口。
 
@@ -115,7 +115,7 @@ exp_dir=$exp/$exp_name
 ./local/prepare_data.sh --stage 1 --stop_stage 3 --data ${data}
 ```
 
-这里会调用本目录下的 [prepare_data.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/local/prepare_data.sh)，完成：
+这里会调用本目录下的 [prepare_data.sh](./local/prepare_data.sh)，完成：
 
 - 下载 `musan`
 - 下载 `RIRS_NOISES`
@@ -138,7 +138,7 @@ exp_dir=$exp/$exp_name
 python local/prepare_data_csv.py --data_dir $data/3dspeaker/train
 ```
 
-这里调用 [prepare_data_csv.py](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/local/prepare_data_csv.py)，把 `wav.scp + utt2spk` 转成训练脚本使用的 `train.csv`。
+这里调用 [prepare_data_csv.py](./local/prepare_data_csv.py)，把 `wav.scp + utt2spk` 转成训练脚本使用的 `train.csv`。
 
 这个 CSV 每一行包含：
 
@@ -161,10 +161,10 @@ torchrun --nproc_per_node=$num_gpu speakerlab/bin/train.py --config conf/cam++.y
 这是最关键的一步。
 
 它调用项目公共训练入口：
-[train.py](e:/Speaker_recognition/Graduation_Project/3D-Speaker/speakerlab/bin/train.py)
+[train.py](../../../speakerlab/bin/train.py)
 
 并加载配置文件：
-[cam++.yaml](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/conf/cam++.yaml)
+[cam++.yaml](./conf/cam++.yaml)
 
 传入的几个动态参数分别是：
 
@@ -227,7 +227,7 @@ python speakerlab/bin/compute_score_metrics.py --enrol_data $exp_dir/embeddings 
 ## 4. `conf/cam++.yaml` 说明
 
 文件位置：
-[cam++.yaml](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/conf/cam++.yaml)
+[cam++.yaml](./conf/cam++.yaml)
 
 这是 baseline 的核心配置文件，定义了训练过程中“构建什么对象、用什么参数”。
 
@@ -269,7 +269,7 @@ embedding_model:
 ```
 
 说明 embedding 提取器是 `CAMPPlus`，模型源码在：
-[DTDNN.py](e:/Speaker_recognition/Graduation_Project/3D-Speaker/speakerlab/models/campplus/DTDNN.py)
+[DTDNN.py](../../../speakerlab/models/campplus/DTDNN.py)
 
 ```yaml
 classifier:
@@ -292,7 +292,7 @@ classifier:
 ### 5.1 `download_data.sh`
 
 文件位置：
-[download_data.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/local/download_data.sh)
+[download_data.sh](./local/download_data.sh)
 
 职责：
 
@@ -307,7 +307,7 @@ classifier:
 ### 5.2 `prepare_data.sh`
 
 文件位置：
-[prepare_data.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/local/prepare_data.sh)
+[prepare_data.sh](./local/prepare_data.sh)
 
 这是数据准备主脚本，按 stage 分三步：
 
@@ -338,7 +338,7 @@ grep -v "Device09" ...
 ### 5.3 `prepare_data_csv.py`
 
 文件位置：
-[prepare_data_csv.py](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/local/prepare_data_csv.py)
+[prepare_data_csv.py](./local/prepare_data_csv.py)
 
 职责是把 Kaldi 风格索引转成训练 CSV。
 
@@ -364,7 +364,7 @@ grep -v "Device09" ...
 ### 6.1 `parse_options.sh`
 
 文件位置：
-[parse_options.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/utils/parse_options.sh)
+[parse_options.sh](./utils/parse_options.sh)
 
 作用是解析命令行参数，例如：
 
@@ -394,7 +394,7 @@ bash run.sh --stage 3 --stop_stage 3 --exp_name campp_thesis
 ### 6.3 `m4a2wav.pl`
 
 文件位置：
-[m4a2wav.pl](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/utils/m4a2wav.pl)
+[m4a2wav.pl](./utils/m4a2wav.pl)
 
 这个脚本并不直接参与当前 `3D-Speaker + CAM++` 训练流程。
 
@@ -405,7 +405,7 @@ bash run.sh --stage 3 --stop_stage 3 --exp_name campp_thesis
 ## 7. `path.sh` 说明
 
 文件位置：
-[path.sh](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/path.sh)
+[path.sh](./path.sh)
 
 内容很短，但很关键：
 
@@ -426,7 +426,7 @@ export OMP_NUM_THREADS=1
 ## 8. `README.md` 说明
 
 文件位置：
-[README.md](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/README.md)
+[README.md](./README.md)
 
 这个文件主要提供：
 
@@ -440,7 +440,7 @@ export OMP_NUM_THREADS=1
 ## 9. `speakerlab` 文件说明
 
 文件位置：
-[speakerlab](e:/Speaker_recognition/Graduation_Project/3D-Speaker/egs/3dspeaker/sv-cam++/speakerlab)
+[speakerlab](./speakerlab)
 
 这个文件内容是：
 
