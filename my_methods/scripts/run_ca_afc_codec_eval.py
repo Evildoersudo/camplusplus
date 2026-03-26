@@ -89,6 +89,22 @@ def label_to_binary(label: str) -> int:
     raise ValueError(f"Unsupported trial label: {label}")
 
 
+def normalize_trial_utt(utt: str) -> str:
+    """Normalize CN-Celeb trial utterance ids to match wav.scp keys."""
+
+    value = str(utt).strip().replace("\\", "/")
+    if not value:
+        raise ValueError("Encountered empty utterance id in trials.")
+    if value.startswith(("enroll-", "test-")):
+        return value
+    if value.endswith("-enroll"):
+        return f"enroll-{value}"
+    if value.startswith("test/"):
+        stem = Path(value).stem
+        return f"test-{stem}"
+    return value
+
+
 def load_trials(path: Path):
     """Load all trials as `(label, utt1, utt2)` tuples."""
 
@@ -98,8 +114,16 @@ def load_trials(path: Path):
             parts = line.strip().split()
             if len(parts) != 3:
                 continue
-            label, utt1, utt2 = parts
-            rows.append((label_to_binary(label), utt1, utt2))
+            first, second, third = parts
+            try:
+                label = label_to_binary(first)
+                utt1 = normalize_trial_utt(second)
+                utt2 = normalize_trial_utt(third)
+            except ValueError:
+                label = label_to_binary(third)
+                utt1 = normalize_trial_utt(first)
+                utt2 = normalize_trial_utt(second)
+            rows.append((label, utt1, utt2))
     return rows
 
 
@@ -287,6 +311,10 @@ def main():
     trials = load_trials(Path(args.trials_file).resolve())
     trials = sample_trials_stratified(trials, args.limit, args.target_limit, args.nontarget_limit, args.trial_sample_seed)
     needed_utts = {utt for _, utt1, utt2 in trials for utt in (utt1, utt2)}
+    missing_utts = sorted(utt for utt in needed_utts if utt not in utt_to_wav)
+    if missing_utts:
+        preview = ", ".join(missing_utts[:10])
+        raise KeyError(f"{len(missing_utts)} trial utterances are missing from wav.scp. First few: {preview}")
     print(f"Trial selection: selected_trials={len(trials)}, selected_utts={len(needed_utts)}")
 
     frontend = load_frontend(Path(args.frontend_ckpt).resolve(), device=device)

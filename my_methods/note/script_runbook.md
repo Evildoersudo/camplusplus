@@ -2,6 +2,10 @@
 
 ## 目录组织
 
+服务器从解压数据集到训练、评测的完整流程见：
+
+- [server_deployment_workflow.md](E:/Speaker_recognition/Graduation_Project/camplusplus/my_methods/note/server_deployment_workflow.md)
+
 当前 `my_methods` 已按功能拆分，后续新增脚本也按这个结构放置：
 
 - `my_methods/models/`
@@ -37,6 +41,15 @@
 - `cosine_embedding_consistency`：冻结 CAM++ 的 embedding 一致性损失。
 - `load_frozen_campplus`：加载并冻结预训练 CAM++。
 
+### `my_methods/data/frontend_features.py`
+
+- 作用：提供经典前端特征处理函数。
+- 关键函数：
+- `load_audio_mono`：读取单通道音频并按目标采样率重采样。
+- `compute_fbank_feature`：提取 FBank。
+- `compute_mfcc_feature`：提取 MFCC。
+- `apply_cmvn`：对特征做 utterance-level CMVN。
+
 ### `my_methods/tools/build_pair_manifest.py`
 
 - 作用：把 clean `wav.scp` 和 codec `wav.scp` 组织成 clean/codec 配对训练清单。
@@ -51,6 +64,21 @@
 - `aux_feat`
 - `length`
 - 输出：供 CA-AFC 训练使用的 offline feature manifest CSV。
+
+### `my_methods/tools/visualize_frontend_features.py`
+
+- 作用：读取单条音频，提取 FBank、MFCC、CMVN，并保存 `.npy` 和图片。
+- 输出：
+- `waveform.png`
+- `fbank.npy`
+- `fbank.png`
+- `mfcc.npy`
+- `mfcc.png`
+- `fbank_cmvn.npy`
+- `fbank_cmvn.png`
+- `mfcc_cmvn.npy`
+- `mfcc_cmvn.png`
+- `summary.json`
 
 ### `my_methods/scripts/train_ca_afc.py`
 
@@ -89,6 +117,28 @@ python my_methods/tools/build_pair_manifest.py \
   --output_csv my_methods/note/cnceleb_fixedrate_pair_manifest.csv
 ```
 
+## 经典前端特征处理与可视化
+
+```powershell
+python my_methods\tools\visualize_frontend_features.py `
+  --wav_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\test\wav.scp `
+  --utt_id test-id00891-speech-01-001 `
+  --output_dir my_methods\exp\frontend_feature_demo `
+  --sample_rate 16000 `
+  --num_mel_bins 80 `
+  --num_ceps 13 `
+  --frame_length_ms 25 `
+  --frame_shift_ms 10 `
+  --variance_norm
+```
+
+说明：
+
+- 会读取一条音频，输出波形图、FBank 图、MFCC 图，以及做过 CMVN 后的特征图。
+- 同时保存对应的 `.npy` 文件，方便后续做分析、对比和论文插图。
+- 如果你已经知道真实音频路径，也可以直接传 `--input_wav <path>`。
+- 对 CN-Celeb 这类 Kaldi 风格 recipe，推荐用 `--wav_scp + --utt_id`，不要手动猜音频目录。
+
 ## 2. 训练 CA-AFC
 
 推荐先做离线特征预提取，再训练。这样训练阶段不再重复读取音频、提 FBank、提 pitch。
@@ -118,6 +168,36 @@ python my_methods/scripts/train_ca_afc.py \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
+  --device cuda
+```
+
+新增训练观察与 smoke test 参数：
+
+- `--log_interval 100`
+  - 每 100 个 batch 打印一次当前 batch loss、累计耗时和当前 epoch 预计剩余时间。
+- `--max_train_samples 0`
+  - 训练集样本上限，`0` 表示使用全部训练样本。
+- `--max_valid_samples 0`
+  - 验证集样本上限，`0` 表示使用全部验证样本。
+
+推荐先做 smoke test：
+
+```powershell
+python my_methods\scripts\train_ca_afc.py `
+  --train_feature_manifest my_methods\note\cnceleb_fixedrate_feature_manifest.csv `
+  --output_dir my_methods\exp\ca_afc_cnceleb_fixedrate_smoke `
+  --campplus_model_bin pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
+  --max_frames 300 `
+  --batch_size 16 `
+  --num_workers 0 `
+  --pretrain_epochs 1 `
+  --finetune_epochs 1 `
+  --max_train_samples 4096 `
+  --max_valid_samples 512 `
+  --log_interval 20 `
+  --lambda_rec 1.0 `
+  --lambda_emb 0.3 `
+  --lambda_smooth 0.01 `
   --device cuda
 ```
 
