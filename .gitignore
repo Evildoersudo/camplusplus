@@ -24,7 +24,8 @@ ENV/
 .idea/
 *.swp
 *.swo
-
+my_methods/note/*.csv
+my_methods/exp/
 # OS / misc
 Thumbs.db
 Desktop.ini
