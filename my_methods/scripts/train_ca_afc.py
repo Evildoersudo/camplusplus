@@ -11,6 +11,7 @@ import argparse
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -52,6 +53,9 @@ def parse_args():
             "  --lambda_rec       weight for feature reconstruction loss\n"
             "  --lambda_emb       weight for CAM++ embedding consistency loss in stage 2\n"
             "  --lambda_smooth    weight for temporal smoothness regularization\n"
+            "  --log_interval     print batch progress every N steps\n"
+            "  --max_train_samples optional cap for quick smoke tests on the train split\n"
+            "  --max_valid_samples optional cap for quick smoke tests on the validation split\n"
             "  --device           training device, usually cuda or cpu\n"
         ),
     )
@@ -176,6 +180,24 @@ def parse_args():
         help="Validation split ratio when valid_manifest is not provided. Example: 0.1 means 10%% validation.",
     )
     parser.add_argument(
+        "--max_train_samples",
+        type=int,
+        default=0,
+        help="Optional train-set cap for smoke tests. 0 means use the full training split.",
+    )
+    parser.add_argument(
+        "--max_valid_samples",
+        type=int,
+        default=0,
+        help="Optional validation-set cap for smoke tests. 0 means use the full validation split.",
+    )
+    parser.add_argument(
+        "--log_interval",
+        type=int,
+        default=100,
+        help="Print progress every N batches inside each epoch.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -237,6 +259,9 @@ def make_dataloaders(args):
             generator = torch.Generator().manual_seed(args.seed)
             train_set, valid_set = random_split(full_set, [train_len, len(full_set) - train_len], generator=generator)
 
+    train_set = maybe_limit_dataset(train_set, args.max_train_samples, args.seed)
+    valid_set = maybe_limit_dataset(valid_set, args.max_valid_samples, args.seed + 1)
+
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
@@ -252,6 +277,16 @@ def make_dataloaders(args):
         collate_fn=collate_pair_batch,
     )
     return train_loader, valid_loader
+
+
+def maybe_limit_dataset(dataset, max_samples: int, seed: int):
+    """Optionally shrink a dataset for smoke tests while keeping sampling reproducible."""
+
+    if max_samples <= 0 or len(dataset) <= max_samples:
+        return dataset
+    generator = torch.Generator().manual_seed(seed)
+    subset, _ = random_split(dataset, [max_samples, len(dataset) - max_samples], generator=generator)
+    return subset
 
 
 def compute_losses(batch, frontend, campplus, stage: str, args, device: torch.device):
@@ -291,8 +326,11 @@ def run_epoch(loader, frontend, campplus, optimizer, stage: str, args, device: t
     frontend.train(mode=train)
     stats = {"loss": 0.0, "rec_loss": 0.0, "emb_loss": 0.0, "smooth_loss": 0.0}
     num_steps = 0
+    total_steps = len(loader)
+    split_name = "train" if train else "valid"
+    start_time = time.perf_counter()
 
-    for batch in loader:
+    for step, batch in enumerate(loader, start=1):
         with torch.set_grad_enabled(train):
             total, batch_stats = compute_losses(batch, frontend, campplus, stage, args, device)
             if train:
@@ -304,9 +342,31 @@ def run_epoch(loader, frontend, campplus, optimizer, stage: str, args, device: t
             stats[key] += value
         num_steps += 1
 
+        if args.log_interval > 0 and (step == 1 or step % args.log_interval == 0 or step == total_steps):
+            elapsed = time.perf_counter() - start_time
+            avg_step = elapsed / step
+            eta = max(0.0, avg_step * (total_steps - step))
+            print(
+                "[{split}] stage={stage} batch={step}/{total} "
+                "loss={loss:.4f} rec={rec:.4f} emb={emb:.4f} smooth={smooth:.4f} "
+                "elapsed={elapsed:.1f}s eta={eta:.1f}s".format(
+                    split=split_name,
+                    stage=stage,
+                    step=step,
+                    total=total_steps,
+                    loss=batch_stats["loss"],
+                    rec=batch_stats["rec_loss"],
+                    emb=batch_stats["emb_loss"],
+                    smooth=batch_stats["smooth_loss"],
+                    elapsed=elapsed,
+                    eta=eta,
+                )
+            )
+
     if num_steps == 0:
-        return stats
-    return {key: value / num_steps for key, value in stats.items()}
+        return stats, 0.0
+    epoch_seconds = time.perf_counter() - start_time
+    return {key: value / num_steps for key, value in stats.items()}, epoch_seconds
 
 
 def save_frontend_checkpoint(path: Path, frontend, optimizer, epoch: int, stage: str, args):
@@ -358,23 +418,66 @@ def main():
     history = []
     best_valid = float("inf")
     total_epochs = args.pretrain_epochs + args.finetune_epochs
+    print(
+        "Training setup: device={device}, train_samples={train_samples}, valid_samples={valid_samples}, "
+        "train_batches={train_batches}, valid_batches={valid_batches}, total_epochs={epochs}".format(
+            device=device,
+            train_samples=len(train_loader.dataset),
+            valid_samples=len(valid_loader.dataset),
+            train_batches=len(train_loader),
+            valid_batches=len(valid_loader),
+            epochs=total_epochs,
+        )
+    )
 
     for epoch in range(start_epoch + 1, total_epochs + 1):
         stage = "pretrain" if epoch <= args.pretrain_epochs else "finetune"
         if resumed_stage == "finetune" and epoch <= args.pretrain_epochs:
             continue
 
-        train_stats = run_epoch(train_loader, frontend, campplus, optimizer, stage, args, device, train=True)
-        valid_stats = run_epoch(valid_loader, frontend, campplus, optimizer, stage, args, device, train=False)
+        print(
+            "Epoch {epoch}/{total} started: stage={stage}, train_batches={train_batches}, valid_batches={valid_batches}".format(
+                epoch=epoch,
+                total=total_epochs,
+                stage=stage,
+                train_batches=len(train_loader),
+                valid_batches=len(valid_loader),
+            )
+        )
+        epoch_start = time.perf_counter()
+        train_stats, train_seconds = run_epoch(train_loader, frontend, campplus, optimizer, stage, args, device, train=True)
+        valid_stats, valid_seconds = run_epoch(valid_loader, frontend, campplus, optimizer, stage, args, device, train=False)
+        epoch_seconds = time.perf_counter() - epoch_start
+        remaining_epochs = total_epochs - epoch
+        eta_seconds = epoch_seconds * remaining_epochs
 
         record = {
             "epoch": epoch,
             "stage": stage,
             "train": train_stats,
             "valid": valid_stats,
+            "timing": {
+                "train_seconds": train_seconds,
+                "valid_seconds": valid_seconds,
+                "epoch_seconds": epoch_seconds,
+                "remaining_epochs": remaining_epochs,
+                "eta_seconds": eta_seconds,
+            },
         }
         history.append(record)
         print(json.dumps(record, ensure_ascii=False))
+        print(
+            "Epoch {epoch}/{total} finished in {epoch_seconds:.1f}s "
+            "(train={train_seconds:.1f}s, valid={valid_seconds:.1f}s), remaining_eta={eta_seconds:.1f}s ({eta_minutes:.1f} min)".format(
+                epoch=epoch,
+                total=total_epochs,
+                epoch_seconds=epoch_seconds,
+                train_seconds=train_seconds,
+                valid_seconds=valid_seconds,
+                eta_seconds=eta_seconds,
+                eta_minutes=eta_seconds / 60.0,
+            )
+        )
 
         ckpt_path = output_dir / "checkpoints" / f"ca_afc_epoch_{epoch:03d}.pt"
         save_frontend_checkpoint(ckpt_path, frontend, optimizer, epoch, stage, args)
