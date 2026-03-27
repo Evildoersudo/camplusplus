@@ -92,17 +92,17 @@
 
 ## 4. 通用命令模板
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root <degraded_wav_root> `
-  --codec <codec_name> `
-  --bitrate <bitrate_if_needed> `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root <degraded_wav_root> \
+  --codec <codec_name> \
+  --bitrate <bitrate_if_needed> \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
   --report_file <report_json>
 ```
 
@@ -117,128 +117,128 @@ python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
 
 ### 5.1 Opus 32k
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_opus32k\wav16k `
-  --codec opus `
-  --bitrate 32k `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_opus32k_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_opus32k/wav16k \
+  --codec opus \
+  --bitrate 32k \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_opus32k_full.json
 ```
 
 ### 5.2 Opus 16k
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_opus16k\wav16k `
-  --codec opus `
-  --bitrate 16k `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_opus16k_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_opus16k/wav16k \
+  --codec opus \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_opus16k_full.json
 ```
 
 ### 5.3 Opus 8k
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_opus8k\wav16k `
-  --codec opus `
-  --bitrate 8k `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_opus8k_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_opus8k/wav16k \
+  --codec opus \
+  --bitrate 8k \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_opus8k_full.json
 ```
 
 ### 5.4 Opus 4k
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_opus4k\wav16k `
-  --codec opus `
-  --bitrate 4k `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_opus4k_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_opus4k/wav16k \
+  --codec opus \
+  --bitrate 4k \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_opus4k_full.json
 ```
 
 ### 5.5 G.711 mu-law
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_g711_mulaw\wav16k `
-  --codec g711_mulaw `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_g711_mulaw_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_g711_mulaw/wav16k \
+  --codec g711_mulaw \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_g711_mulaw_full.json
 ```
 
 ### 5.6 G.711 A-law
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_g711_alaw\wav16k `
-  --codec g711_alaw `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_g711_alaw_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_g711_alaw/wav16k \
+  --codec g711_alaw \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_g711_alaw_full.json
 ```
 
 ### 5.7 AMR-WB 12.65k
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_amrwb_1265\wav16k `
-  --codec amrwb `
-  --bitrate 12.65k `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_amrwb_1265_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_amrwb_1265/wav16k \
+  --codec amrwb \
+  --bitrate 12.65k \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_amrwb_1265_full.json
 ```
 
 ### 5.8 AMR-WB 23.85k
 
-```powershell
-python egs\3dspeaker\sv-cam++\local\run_pretrained_codec_eval.py `
-  --model_id iic/speech_campplus_sv_zh-cn_16k-common `
-  --trials_file egs\3dspeaker\sv-cam++\data\vctk\trials\trials `
-  --clean_wav_root egs\3dspeaker\sv-cam++\data\vctk_16k\wav16k `
-  --degraded_wav_root egs\3dspeaker\sv-cam++\data\vctk_amrwb_2385\wav16k `
-  --codec amrwb `
-  --bitrate 23.85k `
-  --sample_rate 16000 `
-  --fraction 1 `
-  --overwrite `
-  --report_file egs\3dspeaker\sv-cam++\exp\pretrained_codec_eval_amrwb_2385_full.json
+```bash
+python egs/3dspeaker/sv-cam++/local/run_pretrained_codec_eval.py \
+  --model_id iic/speech_campplus_sv_zh-cn_16k-common \
+  --trials_file egs/3dspeaker/sv-cam++/data/vctk/trials/trials \
+  --clean_wav_root egs/3dspeaker/sv-cam++/data/vctk_16k/wav16k \
+  --degraded_wav_root egs/3dspeaker/sv-cam++/data/vctk_amrwb_2385/wav16k \
+  --codec amrwb \
+  --bitrate 23.85k \
+  --sample_rate 16000 \
+  --fraction 1 \
+  --overwrite \
+  --report_file egs/3dspeaker/sv-cam++/exp/pretrained_codec_eval_amrwb_2385_full.json
 ```
 
 ## 6. 建议实验顺序

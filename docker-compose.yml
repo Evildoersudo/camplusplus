@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: nvcr.io/nvidia/pytorch:24.08-py3
+        BASE_IMAGE: nvcr.io/nvidia/pytorch:25.12-py3
     image: camplusplus:latest
     container_name: camplusplus
     working_dir: /workspace/camplusplus

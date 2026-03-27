@@ -1,0 +1,10 @@
+tqdm>=4.42.0
+scipy>=1.7.0
+numpy>=1.26,<2.0
+scikit-learn>=1.4,<1.8
+soundfile
+kaldiio
+pyyaml
+matplotlib
+pandas
+openpyxl

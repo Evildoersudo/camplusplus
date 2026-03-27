@@ -80,13 +80,13 @@
 
 ## 1. 构建配对清单
 
-```powershell
-python my_methods\tools\build_pair_manifest.py `
-  --clean_wav_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\clean_train\wav.scp `
-  --codec_wav_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb_fixedrate_mixed\train\wav.scp `
-  --utt2spk egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\clean_train\utt2spk `
-  --codec_assignment_csv egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb_fixedrate_mixed\train\codec_assignment.csv `
-  --output_csv my_methods\note\cnceleb_fixedrate_pair_manifest.csv
+```bash
+python my_methods/tools/build_pair_manifest.py \
+  --clean_wav_scp egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train/wav.scp \
+  --codec_wav_scp egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_fixedrate_mixed/train/wav.scp \
+  --utt2spk egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train/utt2spk \
+  --codec_assignment_csv egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_fixedrate_mixed/train/codec_assignment.csv \
+  --output_csv my_methods/note/cnceleb_fixedrate_pair_manifest.csv
 ```
 
 ## 2. 训练 CA-AFC
@@ -95,29 +95,29 @@ python my_methods\tools\build_pair_manifest.py `
 
 ### 2.1 预提取 pair features
 
-```powershell
-python my_methods\tools\precompute_pair_features.py `
-  --pair_manifest my_methods\note\cnceleb_fixedrate_pair_manifest.csv `
-  --output_root my_methods\exp\ca_afc_features_cnceleb_fixedrate `
-  --output_manifest my_methods\note\cnceleb_fixedrate_feature_manifest.csv `
+```bash
+python my_methods/tools/precompute_pair_features.py \
+  --pair_manifest my_methods/note/cnceleb_fixedrate_pair_manifest.csv \
+  --output_root my_methods/exp/ca_afc_features_cnceleb_fixedrate \
+  --output_manifest my_methods/note/cnceleb_fixedrate_feature_manifest.csv \
   --sample_rate 16000
 ```
 
 ### 2.2 用离线特征训练 CA-AFC
 
-```powershell
-python my_methods\scripts\train_ca_afc.py `
-  --train_feature_manifest my_methods\note\cnceleb_fixedrate_feature_manifest.csv `
-  --output_dir my_methods\exp\ca_afc_cnceleb_fixedrate `
-  --campplus_model_bin pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
-  --max_frames 300 `
-  --batch_size 16 `
-  --num_workers 0 `
-  --pretrain_epochs 5 `
-  --finetune_epochs 10 `
-  --lambda_rec 1.0 `
-  --lambda_emb 0.3 `
-  --lambda_smooth 0.01 `
+```bash
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/note/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
+  --max_frames 300 \
+  --batch_size 16 \
+  --num_workers 0 \
+  --pretrain_epochs 5 \
+  --finetune_epochs 10 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
   --device cuda
 ```
 
@@ -152,32 +152,32 @@ python my_methods\scripts\train_ca_afc.py `
 
 断点续训：
 
-```powershell
-python my_methods\scripts\train_ca_afc.py `
-  --train_feature_manifest my_methods\note\cnceleb_fixedrate_feature_manifest.csv `
-  --output_dir my_methods\exp\ca_afc_cnceleb_fixedrate `
-  --campplus_model_bin pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
-  --resume `
+```bash
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/note/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
+  --resume \
   --device cuda
 ```
 
 ## 3. 评测 CA-AFC + CAM++
 
-```powershell
-python my_methods\scripts\run_ca_afc_codec_eval.py `
-  --test_wav_scp egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\test\wav.scp `
-  --trials_file egs\3dspeaker\sv-cam++\data\CN_celeb_database\cnceleb\trials\trials.lst `
-  --frontend_ckpt my_methods\exp\ca_afc_cnceleb_fixedrate\best_frontend.pt `
-  --campplus_model_bin pretrained\speech_campplus_sv_zh-cn_16k-common\campplus_cn_common.bin `
-  --codec_conditions clean,opus@16k,aac@16k,amrwb@15.85k `
-  --embedding_cache_root my_methods\exp\ca_afc_cnceleb_fixedrate_eval\embedding_cache `
-  --limit 2000 `
-  --target_limit 100 `
-  --nontarget_limit 1900 `
-  --report_csv my_methods\exp\ca_afc_cnceleb_fixedrate_eval\report.csv `
-  --report_json my_methods\exp\ca_afc_cnceleb_fixedrate_eval\report.json `
-  --table_md my_methods\exp\ca_afc_cnceleb_fixedrate_eval\report.md `
-  --plot_dir my_methods\exp\ca_afc_cnceleb_fixedrate_eval\plots `
+```bash
+python my_methods/scripts/run_ca_afc_codec_eval.py \
+  --test_wav_scp egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/test/wav.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/trials/trials.lst \
+  --frontend_ckpt my_methods/exp/ca_afc_cnceleb_fixedrate/best_frontend.pt \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
+  --codec_conditions clean,opus@16k,aac@16k,amrwb@15.85k \
+  --embedding_cache_root my_methods/exp/ca_afc_cnceleb_fixedrate_eval/embedding_cache \
+  --limit 2000 \
+  --target_limit 100 \
+  --nontarget_limit 1900 \
+  --report_csv my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.csv \
+  --report_json my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.json \
+  --table_md my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.md \
+  --plot_dir my_methods/exp/ca_afc_cnceleb_fixedrate_eval/plots \
   --device cuda
 ```
 
