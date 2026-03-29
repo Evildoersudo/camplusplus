@@ -55,8 +55,7 @@ exp/
 pretrained/
 
 # Dataset and downloaded archives
-data/
-**/data/
+
 *.zip
 *.tar
 *.tar.gz
@@ -64,7 +63,7 @@ data/
 *.gz
 *.xz
 *.cfg
-
+egs/3dspeaker/sv-cam++/data
 # Runtime temp files
 tmp/
 temp/
