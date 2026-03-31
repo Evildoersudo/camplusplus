@@ -10,9 +10,15 @@ from pathlib import Path
 def parse_args():
     # This script prepares a CN-Celeb recipe layout from the downloaded
     # archives, then builds a mixed codec training set for CAM++ fine-tuning.
+    """
+    解析命令行参数。
+    该脚本的主要任务是从下载的压缩包中准备 CN-Celeb 数据集的布局，
+    并为 CAM++ 模型微调构建一个混合编码（Mixed Codec）的训练集。
+    """
     parser = argparse.ArgumentParser(
         description="Prepare CN-Celeb clean/mixed train data, test metadata, and MUSAN/RIRS metadata."
     )
+    # --- 基础路径配置 ---
     parser.add_argument("--download_dir", type=str, required=True, help="Directory containing downloaded archives")
     parser.add_argument("--data_root", type=str, default="data", help="Recipe data root")
     parser.add_argument(
@@ -21,18 +27,22 @@ def parse_args():
         default="CN_celeb_database",
         help="Subdirectory under data_root used to store all generated CN-Celeb metadata and mixed data",
     )
+    
     parser.add_argument("--raw_root", type=str, default="", help="Optional extracted raw data root")
+    # --- 音频处理与并发配置 ---
     parser.add_argument("--sample_rate", type=int, default=16000, help="Expected training sample rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for mixed split")
     parser.add_argument("--num_workers", type=int, default=8, help="Worker count for codec generation")
     parser.add_argument("--prepare_csv_nj", type=int, default=8, help="Worker count for prepare_data_csv.py")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite extracted files and generated audio")
+    # --- 混合编码比例配置 (各类音质在训练集中的占比) ---
     parser.add_argument("--max_utts", type=int, default=0, help="Optional utterance cap for debugging")
     parser.add_argument("--clean_ratio", type=float, default=0.30, help="Fraction kept clean in mixed train set")
     parser.add_argument("--opus_ratio", type=float, default=0.30, help="Fraction encoded with Opus")
     parser.add_argument("--amrwb_ratio", type=float, default=0.20, help="Fraction encoded with AMR-WB")
     parser.add_argument("--aac_ratio", type=float, default=0.00, help="Fraction encoded with AAC")
     parser.add_argument("--g711_ratio", type=float, default=0.20, help="Fraction encoded with G.711")
+    # --- 编码器特定参数 (码率和变体) ---
     parser.add_argument("--opus_bitrates", type=str, default="4k,6k,8k", help="Opus bitrate candidates")
     parser.add_argument(
         "--amrwb_bitrates",
@@ -51,18 +61,25 @@ def parse_args():
 
 
 def run_command(cmd):
+    """通用辅助函数：执行 Shell 命令，如果失败则抛出异常停止程序"""
     subprocess.run(cmd, check=True)
 
 
 def ensure_cnceleb2_archive(download_dir: Path):
+    """
+    确保 CN-Celeb2 的压缩包是完整的。
+    由于官方数据很大，通常分卷下载（.tar.gz, .tar.gzaa, .tar.gzab 等）。
+    此函数会检测分卷文件，并将它们合并成一个完整的 cn-celeb2_v2.tar.gz 文件。
+    """
     archive = download_dir / "cn-celeb2_v2.tar.gz"
+    # 如果完整的压缩包已经存在，直接返回它的路径
     if archive.exists():
         return archive
-
+    # 扫描目录下所有的分卷文件并排序
     parts = sorted(download_dir.glob("cn-celeb2_v2.tar.gz*"))
     if not parts:
         return None
-
+    # 以二进制追加写入的模式，把所有分卷拼接起来
     with archive.open("wb") as fout:
         for part in parts:
             with part.open("rb") as fin:
@@ -71,6 +88,10 @@ def ensure_cnceleb2_archive(download_dir: Path):
 
 
 def rebuild_cnceleb2_archive(download_dir: Path):
+    """
+    当之前的合并文件丢失或损坏导致解压失败时，调用此函数。
+    它会先删除损坏的压缩包，然后重新执行合并逻辑。
+    """
     # Rebuild the merged archive from split parts when the previous merged file
     # is missing or corrupted.
     archive = download_dir / "cn-celeb2_v2.tar.gz"
@@ -79,6 +100,10 @@ def rebuild_cnceleb2_archive(download_dir: Path):
 
 
 def extract_if_needed(download_dir: Path, raw_root: Path):
+    """
+    核心解压模块：检查目标文件夹是否存在，不存在才进行解压。
+    防止脚本中断后重新运行导致重复耗时。
+    """
     raw_root.mkdir(parents=True, exist_ok=True)
 
     musan_archive = download_dir / "musan.tar.gz"
@@ -113,6 +138,10 @@ def extract_if_needed(download_dir: Path, raw_root: Path):
 
 
 def utt_id_from_path(path: Path, speaker_id: str):
+    """
+    根据文件路径生成全局唯一的语音 ID (Utterance ID)。
+    为了防止不同说话人的文件名冲突，统一格式化为: {speaker_id}-{文件名}
+    """
     stem = path.stem
     if stem.startswith(f"{speaker_id}-") or stem.startswith(f"{speaker_id}_"):
         return stem
@@ -120,6 +149,11 @@ def utt_id_from_path(path: Path, speaker_id: str):
 
 
 def write_spk2utt(utt2spk_path: Path, spk2utt_path: Path):
+    """
+    Kaldi 数据格式转换：根据 utt2spk 生成反向映射的 spk2utt。
+    输入格式: [语音ID] [说话人ID]
+    输出格式: [说话人ID] [语音ID_1] [语音ID_2] ...
+    """
     spk2utt = defaultdict(list)
     with utt2spk_path.open("r", encoding="utf-8") as handle:
         for line in handle:
@@ -132,6 +166,10 @@ def write_spk2utt(utt2spk_path: Path, spk2utt_path: Path):
 
 
 def build_split_metadata(file_paths, split_dir: Path):
+    """
+    构建 Kaldi 风格的元数据文件 (wav.scp 和 utt2spk)。
+    这是语音模型训练的数据字典基础。
+    """
     split_dir.mkdir(parents=True, exist_ok=True)
     wav_scp_path = split_dir / "wav.scp"
     utt2spk_path = split_dir / "utt2spk"
@@ -142,13 +180,19 @@ def build_split_metadata(file_paths, split_dir: Path):
         for wav_path in sorted(file_paths):
             speaker_id = wav_path.parent.name
             utt_id = utt_id_from_path(wav_path, speaker_id)
-            fwav.write(f"{utt_id} {wav_path.resolve()}\n")
+            # 写入音频绝对路径映射
+            fwav.write(f"{utt_id} {wav_path.resolve()}\n")#{speaker_id}-{文件名}-{文件绝对路径}
+            # 写入语音到说话人的映射
             futt.write(f"{utt_id} {speaker_id}\n")
-
+    # 生成对应的反向映射表
     write_spk2utt(utt2spk_path, split_dir / "spk2utt")
 
 
 def build_noise_metadata(raw_root: Path, workspace_root: Path):
+    """
+    构建背景噪声 (MUSAN) 和房间混响 (RIRS) 的映射字典 (wav.scp)。
+    用于后续训练时的数据增强 (Data Augmentation)。
+    """
     musan_dir = workspace_root / "musan"
     rirs_dir = workspace_root / "rirs"
     musan_dir.mkdir(parents=True, exist_ok=True)
@@ -160,7 +204,7 @@ def build_noise_metadata(raw_root: Path, workspace_root: Path):
             rel = wav_path.relative_to(raw_root / "musan")
             utt_id = str(rel).replace("\\", "/")
             fout.write(f"{utt_id} {wav_path.resolve()}\n")
-
+# 读取 RIRS 官方提供的 rir_list，解析并转换为本地绝对路径
     rir_list = raw_root / "RIRS_NOISES" / "real_rirs_isotropic_noises" / "rir_list"
     with (rirs_dir / "wav.scp").open("w", encoding="utf-8", newline="\n") as fout:
         with rir_list.open("r", encoding="utf-8") as fin:
@@ -174,6 +218,10 @@ def build_noise_metadata(raw_root: Path, workspace_root: Path):
 
 
 def copy_trial_files(raw_root: Path, trials_dir: Path):
+    """
+    提取官方测试用例 (Trials)。
+    这些文件记录了用于测试模型的“考题”（例如：判断音频A和音频B是否为同一人）。
+    """
     trials_dir.mkdir(parents=True, exist_ok=True)
     eval_dir = raw_root / "CN-Celeb_flac" / "eval"
 
@@ -196,7 +244,7 @@ def prepare_clean_and_test(raw_root: Path, workspace_root: Path, sample_rate: in
     clean_train_dir = cnceleb_root / "clean_train"
     test_dir = cnceleb_root / "test"
     trials_dir = cnceleb_root / "trials"
-
+    # 汇总 CN-Celeb1 和 CN-Celeb2 的训练音频
     cnceleb1_train = sorted((raw_root / "CN-Celeb_flac" / "data").rglob("*.flac"))
     cnceleb2_root = raw_root / "CN-Celeb2_flac" / "data"
     if cnceleb2_root.exists():
@@ -209,17 +257,18 @@ def prepare_clean_and_test(raw_root: Path, workspace_root: Path, sample_rate: in
 
     # Use all official eval audio under eval/ as the test pool so trials can
     # reference both enrol and test utterances if present.
+    # 收集所有的评估音频 (eval)
     eval_audio = []
     eval_root = raw_root / "CN-Celeb_flac" / "eval"
     for suffix in ("*.flac", "*.wav"):
         eval_audio.extend(eval_root.rglob(suffix))
     if not eval_audio:
         raise ValueError("No CN-Celeb eval audio found under CN-Celeb_flac/eval")
-
+    # 构建基础元数据文本
     build_split_metadata(train_files, clean_train_dir)
     build_split_metadata(eval_audio, test_dir)
     copy_trial_files(raw_root, trials_dir)
-
+    # 外包任务：调用同目录下的外部脚本 prepare_data_csv.py，将元数据转为 CSV 格式
     prepare_csv_script = Path(__file__).resolve().parent / "prepare_data_csv.py"
     run_command(
         [
@@ -288,15 +337,19 @@ def build_mixed_trainset(args, workspace_root: Path):
 
 def main():
     args = parse_args()
+    # 将路径全部转换为绝对路径 (resolve)，防止执行命令时找不到文件
     data_root = Path(args.data_root).resolve()
     workspace_root = (data_root / args.workspace_name).resolve()
     download_dir = Path(args.download_dir).resolve()
     raw_root = Path(args.raw_root).resolve() if args.raw_root else (data_root / "raw_data")
-
+    # 步骤 1：解压原始压缩包
     extract_if_needed(download_dir, raw_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
+    # 步骤 2：准备噪声数据元信息
     build_noise_metadata(raw_root, workspace_root)
+    # 步骤 3：处理主要语音数据并转换 CSV
     prepare_clean_and_test(raw_root, workspace_root, args.sample_rate, args.prepare_csv_nj)
+    # 步骤 4：生成混合编码数据（高强度数据增强）
     build_mixed_trainset(args, workspace_root)
 
     print("CN-Celeb mixed data preparation finished")

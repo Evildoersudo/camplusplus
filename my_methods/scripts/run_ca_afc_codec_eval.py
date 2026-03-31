@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import matplotlib
 import numpy as np
@@ -27,6 +27,9 @@ if __package__ is None or __package__ == "":
 from my_methods.data.ca_afc_data import compute_aux_features, compute_fbank, load_frozen_campplus, load_wav_mono
 from my_methods.models.ca_afc_frontend import CAAFCFrontend
 from speakerlab.utils.score_metrics import compute_c_norm, compute_eer, compute_pmiss_pfa_rbst
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args():
@@ -64,6 +67,24 @@ def parse_condition(tag: str):
     return codec, bitrate, condition_tag
 
 
+def resolve_runtime_audio_path(path_like: str | Path) -> Path:
+    """Resolve host/container wav paths to a readable runtime path."""
+
+    path = Path(path_like)
+    if path.exists():
+        return path.resolve()
+
+    parts = PurePosixPath(str(path_like)).parts
+    if "camplusplus" in parts:
+        anchor = parts.index("camplusplus")
+        suffix_parts = parts[anchor + 1 :]
+        remapped = REPO_ROOT.joinpath(*suffix_parts)
+        if remapped.exists():
+            return remapped.resolve()
+
+    return path.resolve()
+
+
 def load_wav_scp(path: Path):
     """Load wav.scp into a `utt -> wav_path` mapping."""
 
@@ -74,7 +95,7 @@ def load_wav_scp(path: Path):
             if not line:
                 continue
             utt, wav = line.split(maxsplit=1)
-            mapping[utt] = Path(wav).resolve()
+            mapping[utt] = resolve_runtime_audio_path(wav)
     return mapping
 
 

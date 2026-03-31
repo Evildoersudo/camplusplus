@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import torch
@@ -33,6 +34,12 @@ def parse_args():
     parser.add_argument("--output_manifest", type=str, required=True, help="Output CSV listing all generated feature_pt files")
     parser.add_argument("--sample_rate", type=int, default=16000, help="Audio sample rate used during feature extraction")
     parser.add_argument("--overwrite", action="store_true", help="Regenerate .pt feature files even if they already exist")
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=0,
+        help="Feature precompute worker count. 0 or 1 means serial execution; values >1 enable process-based parallelism.",
+    )
     return parser.parse_args()
 
 
@@ -40,6 +47,36 @@ def feature_output_path(output_root: Path, row) -> Path:
     """Map one utterance to its precomputed feature file path."""
 
     return output_root / row.codec / row.bitrate.replace(".", "").replace("/", "_") / row.spk_id / f"{row.utt_id}.pt"
+
+
+def process_one_row(task):
+    """Precompute or reuse one row and return manifest metadata."""
+
+    row, feature_pt_str, sample_rate, overwrite = task
+    feature_pt = Path(feature_pt_str)
+    feature_pt.parent.mkdir(parents=True, exist_ok=True)
+
+    if feature_pt.exists() and not overwrite:
+        payload = torch.load(str(feature_pt), map_location="cpu")
+        written = 0
+        reused = 1
+    else:
+        payload = extract_pair_features(row.clean_wav, row.codec_wav, sample_rate=sample_rate)
+        torch.save(payload, str(feature_pt))
+        written = 1
+        reused = 0
+
+    return {
+        "utt_id": row.utt_id,
+        "spk_id": row.spk_id,
+        "feature_pt": str(feature_pt),
+        "length": int(payload["length"]),
+        "condition": row.condition,
+        "codec": row.codec,
+        "bitrate": row.bitrate,
+        "written": written,
+        "reused": reused,
+    }
 
 
 def main():
@@ -55,32 +92,25 @@ def main():
     written = 0
     reused = 0
     manifest_rows = []
-    for idx, row in enumerate(rows, start=1):
-        feature_pt = feature_output_path(output_root, row)
-        feature_pt.parent.mkdir(parents=True, exist_ok=True)
+    tasks = [(row, str(feature_output_path(output_root, row)), args.sample_rate, args.overwrite) for row in rows]
 
-        if feature_pt.exists() and not args.overwrite:
-            payload = torch.load(str(feature_pt), map_location="cpu")
-            reused += 1
-        else:
-            payload = extract_pair_features(row.clean_wav, row.codec_wav, sample_rate=args.sample_rate)
-            torch.save(payload, str(feature_pt))
-            written += 1
+    if args.num_workers and args.num_workers > 1:
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            for idx, item in enumerate(executor.map(process_one_row, tasks), start=1):
+                written += item.pop("written")
+                reused += item.pop("reused")
+                manifest_rows.append(item)
 
-        manifest_rows.append(
-            {
-                "utt_id": row.utt_id,
-                "spk_id": row.spk_id,
-                "feature_pt": str(feature_pt),
-                "length": int(payload["length"]),
-                "condition": row.condition,
-                "codec": row.codec,
-                "bitrate": row.bitrate,
-            }
-        )
+                if idx % 200 == 0 or idx == len(rows):
+                    print(f"feature progress: {idx}/{len(rows)} (written={written}, reused={reused})")
+    else:
+        for idx, item in enumerate(map(process_one_row, tasks), start=1):
+            written += item.pop("written")
+            reused += item.pop("reused")
+            manifest_rows.append(item)
 
-        if idx % 200 == 0 or idx == len(rows):
-            print(f"feature progress: {idx}/{len(rows)} (written={written}, reused={reused})")
+            if idx % 200 == 0 or idx == len(rows):
+                print(f"feature progress: {idx}/{len(rows)} (written={written}, reused={reused})")
 
     with output_manifest.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
