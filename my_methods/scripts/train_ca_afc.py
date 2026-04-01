@@ -154,6 +154,18 @@ def parse_args():
         help="Residual head scaling factor. Smaller values reduce residual branch dominance in early training.",
     )
     parser.add_argument(
+        "--codec_vocab",
+        type=str,
+        default="clean,aac,opus,amrwb,g711,unknown",
+        help="Comma-separated codec vocabulary used by codec-conditioned frontend, e.g. clean,aac,opus,amrwb,unknown.",
+    )
+    parser.add_argument(
+        "--codec_emb_dim",
+        type=int,
+        default=16,
+        help="Codec embedding size used by the codec-conditioned modulation block.",
+    )
+    parser.add_argument(
         "--pretrain_epochs",
         type=int,
         default=5,
@@ -474,6 +486,30 @@ def parse_codec_weight_map(text: str) -> dict[str, float]:
     return codec_weights
 
 
+def parse_codec_vocab(text: str) -> list[str]:
+    """Parse codec vocabulary from a comma-separated string."""
+
+    vocab = []
+    seen = set()
+    for item in text.split(","):
+        name = item.strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        vocab.append(name)
+    if "unknown" not in seen:
+        vocab.append("unknown")
+    return vocab
+
+
+def map_codec_ids(codec_names: list[str], codec_to_id: dict[str, int], device: torch.device) -> torch.Tensor:
+    """Map codec string labels to integer ids for codec-conditioned frontend."""
+
+    unknown_id = codec_to_id["unknown"]
+    ids = [int(codec_to_id.get(str(name).lower(), unknown_id)) for name in codec_names]
+    return torch.tensor(ids, dtype=torch.long, device=device)
+
+
 def sample_codec_name(dataset, index: int) -> str:
     """Resolve one sample's codec label from base or subset datasets."""
 
@@ -560,7 +596,7 @@ def build_scheduler(args, optimizer, steps_per_epoch: int, total_epochs: int):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 
-def compute_losses(batch, frontend, campplus, stage: str, args, device: torch.device):
+def compute_losses(batch, frontend, campplus, stage: str, args, device: torch.device, codec_to_id: dict[str, int]):
     """Compute the staged CA-AFC objective on one batch."""
 
     clean_feat = batch["clean_feat"].to(device)
@@ -569,7 +605,8 @@ def compute_losses(batch, frontend, campplus, stage: str, args, device: torch.de
     lengths = batch["lengths"].to(device)
     mask = mask_from_lengths(lengths, clean_feat.shape[1])
 
-    output = frontend(codec_feat, aux_feat)
+    codec_ids = map_codec_ids(batch.get("codec", []), codec_to_id, device)
+    output = frontend(codec_feat, aux_feat, codec_ids=codec_ids)
     use_element_reduction = args.rec_loss_reduction == "element"
     rec_loss = weighted_reconstruction_loss(
         output.enhanced,
@@ -677,7 +714,20 @@ def grad_l2_norm(parameters) -> float:
     return grad_l2_norm_from_grads(grads)
 
 
-def run_epoch(loader, frontend, campplus, optimizer, scheduler, stage: str, args, device: torch.device, train: bool, global_step: int, log_fn):
+def run_epoch(
+    loader,
+    frontend,
+    campplus,
+    optimizer,
+    scheduler,
+    stage: str,
+    args,
+    device: torch.device,
+    train: bool,
+    global_step: int,
+    log_fn,
+    codec_to_id: dict[str, int],
+):
     """Run a full train or validation epoch and aggregate loss statistics."""
 
     frontend.train(mode=train)
@@ -722,7 +772,15 @@ def run_epoch(loader, frontend, campplus, optimizer, scheduler, stage: str, args
 
     for step, batch in enumerate(loader, start=1):
         with torch.set_grad_enabled(train):
-            total, batch_stats, term_tensors, sample_metrics = compute_losses(batch, frontend, campplus, stage, args, device)
+            total, batch_stats, term_tensors, sample_metrics = compute_losses(
+                batch,
+                frontend,
+                campplus,
+                stage,
+                args,
+                device,
+                codec_to_id,
+            )
             if train:
                 should_probe = args.grad_probe_interval > 0 and (
                     step == 1 or step % args.grad_probe_interval == 0 or step == total_steps
@@ -902,11 +960,16 @@ def main():
     train_codec_hist = collect_codec_histogram(train_loader.dataset)
     valid_codec_hist = collect_codec_histogram(valid_loader.dataset)
     finetune_codec_weights = parse_codec_weight_map(args.finetune_codec_weights)
+    codec_vocab = parse_codec_vocab(args.codec_vocab)
+    codec_to_id = {name: idx for idx, name in enumerate(codec_vocab)}
+
     frontend = CAAFCFrontend(
         hidden_dim=args.hidden_dim,
         dropout=args.dropout,
         band_scale=args.band_scale,
         residual_scale=args.residual_scale,
+        num_codecs=len(codec_vocab),
+        codec_emb_dim=args.codec_emb_dim,
     ).to(device)
     campplus = load_frozen_campplus(Path(args.campplus_model_bin).resolve(), device=device)
     campplus.eval()
@@ -935,6 +998,7 @@ def main():
     )
     log_fn("Train codec histogram: " + json.dumps(train_codec_hist, ensure_ascii=False))
     log_fn("Valid codec histogram: " + json.dumps(valid_codec_hist, ensure_ascii=False))
+    log_fn("Codec vocabulary: " + json.dumps(codec_vocab, ensure_ascii=False))
     if finetune_codec_weights:
         log_fn("Finetune weighted sampling enabled: " + json.dumps(finetune_codec_weights, ensure_ascii=False))
 
@@ -967,6 +1031,7 @@ def main():
             train=True,
             global_step=global_step,
             log_fn=log_fn,
+            codec_to_id=codec_to_id,
         )
         valid_stats, valid_seconds, global_step, valid_batch_extremes = run_epoch(
             valid_loader,
@@ -980,6 +1045,7 @@ def main():
             train=False,
             global_step=global_step,
             log_fn=log_fn,
+            codec_to_id=codec_to_id,
         )
         if scheduler is not None and args.scheduler == "step":
             scheduler.step()

@@ -224,6 +224,8 @@ python -u my_methods/scripts/train_ca_afc.py \
   --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
   --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate_smoke \
   --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
   --max_frames 300 \
   --batch_size 32 \
   --num_workers 0 \
@@ -260,8 +262,10 @@ python my_methods/scripts/train_ca_afc.py \
   --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
   --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
   --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
   --max_frames 300 \
-  --batch_size 64 \
+  --batch_size 128 \
   --num_workers 4 \
   --pretrain_epochs 5 \
   --finetune_epochs 10 \
@@ -318,6 +322,8 @@ python my_methods/scripts/train_ca_afc.py \
   --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
   --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate_sgd \
   --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
   --max_frames 300 \
   --batch_size 64 \
   --num_workers 4 \
@@ -467,6 +473,10 @@ python my_methods/scripts/run_ca_afc_codec_eval.py \
   --device cuda
 ```
 
+说明：
+
+- 评测脚本会自动从 `frontend_ckpt` 里读取 `codec_vocab`，并按当前评测 codec 条件传入前端条件调制分支。
+
 ## 10. 长时任务建议
 
 容器内长训练不要直接裸跑，建议用 `tmux`：
@@ -485,6 +495,8 @@ python my_methods/scripts/train_ca_afc.py \
   --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
   --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
   --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
   --max_frames 300 \
   --batch_size 64 \
   --num_workers 4 \
