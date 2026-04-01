@@ -134,24 +134,32 @@ def _crop_features(payload: dict[str, torch.Tensor | int], max_frames: int, rand
     aux_feat = payload["aux_feat"]
     length = int(payload["length"])
     if max_frames <= 0 or length <= max_frames:
-        return {
+        out = {
             "clean_feat": clean_feat,
             "codec_feat": codec_feat,
             "aux_feat": aux_feat,
             "length": length,
         }
+        for key in ("utt_id", "spk_id", "codec", "condition", "bitrate"):
+            if key in payload:
+                out[key] = payload[key]
+        return out
 
     if random_crop:
         start = int(torch.randint(0, length - max_frames + 1, (1,)).item())
     else:
         start = 0
     end = start + max_frames
-    return {
+    out = {
         "clean_feat": clean_feat[start:end],
         "codec_feat": codec_feat[start:end],
         "aux_feat": aux_feat[start:end],
         "length": max_frames,
     }
+    for key in ("utt_id", "spk_id", "codec", "condition", "bitrate"):
+        if key in payload:
+            out[key] = payload[key]
+    return out
 
 
 class PairFeatureDataset(Dataset):
@@ -167,6 +175,11 @@ class PairFeatureDataset(Dataset):
     def __getitem__(self, index: int):
         row = self.rows[index]
         payload = extract_pair_features(row.clean_wav, row.codec_wav, sample_rate=self.sample_rate)
+        payload["utt_id"] = row.utt_id
+        payload["spk_id"] = row.spk_id
+        payload["codec"] = row.codec
+        payload["condition"] = row.condition
+        payload["bitrate"] = row.bitrate
         payload = _crop_features(payload, self.max_frames, self.random_crop)
         return payload
 
@@ -185,6 +198,12 @@ class PrecomputedPairFeatureDataset(Dataset):
 
     def __getitem__(self, index: int):
         payload = torch.load(str(Path(self.rows[index]["feature_pt"]).resolve()), map_location="cpu")
+        row = self.rows[index]
+        payload["utt_id"] = row.get("utt_id", str(index))
+        payload["spk_id"] = row.get("spk_id", "unknown")
+        payload["codec"] = row.get("codec", "unknown")
+        payload["condition"] = row.get("condition", "unknown")
+        payload["bitrate"] = row.get("bitrate", "-")
         return _crop_features(payload, self.max_frames, self.random_crop)
 
 
@@ -198,6 +217,9 @@ def collate_pair_batch(batch):
         "codec_feat": codec_feat,
         "aux_feat": aux_feat,
         "lengths": lengths,
+        "codec": [str(item.get("codec", "unknown")) for item in batch],
+        "utt_id": [str(item.get("utt_id", "")) for item in batch],
+        "spk_id": [str(item.get("spk_id", "")) for item in batch],
     }
 
 

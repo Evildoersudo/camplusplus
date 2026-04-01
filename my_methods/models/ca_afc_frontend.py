@@ -107,9 +107,11 @@ class AuxEncoder(nn.Module):
             nn.Conv1d(32, hidden_dim, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
         )
+        self.norm = nn.LayerNorm(hidden_dim)
 
     def forward(self, aux: torch.Tensor) -> torch.Tensor:
-        return self.net(aux.transpose(1, 2)).transpose(1, 2)
+        hidden = self.net(aux.transpose(1, 2)).transpose(1, 2)
+        return self.norm(hidden)
 
 
 class AttentiveFusion(nn.Module):
@@ -170,23 +172,26 @@ class CAAFCFrontend(nn.Module):
         aux_dim: int = 3,
         hidden_dim: int = 64,
         dropout: float = 0.1,
+        band_scale: float = 1.0,
+        residual_scale: float = 0.1,
     ):
         super().__init__()
         self.feat_dim = feat_dim
         self.aux_dim = aux_dim
         self.hidden_dim = hidden_dim
+        self.band_scale = float(band_scale)
+        self.residual_scale = float(residual_scale)
 
         self.spectral_encoder = SpectralEncoder(hidden_dim=hidden_dim)
         self.aux_encoder = AuxEncoder(aux_dim=aux_dim, hidden_dim=hidden_dim)
         self.fusion = AttentiveFusion(hidden_dim=hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
-        # 频带注意力头：为每一帧的每个频带预测一个 [0, 1] 权重
+        # 频带注意力头：先输出 logits，再映射为以 1.0 为中心的缩放系数。
         self.band_attention = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_dim, feat_dim),
-            nn.Sigmoid(),
         )
         # 残差补偿头：学习在加权后的 FBank 上额外补偿多少
         self.residual_head = nn.Sequential(
@@ -204,9 +209,10 @@ class CAAFCFrontend(nn.Module):
         fused_hidden = self.dropout(self.fusion(spectral_hidden, aux_hidden))
 
         # 逐帧逐带权重，用于重标定原始退化 FBank
-        band_weights = self.band_attention(fused_hidden)
+        band_logits = self.band_attention(fused_hidden)
+        band_weights = 1.0 + self.band_scale * torch.tanh(band_logits)
         # 残差项，用于补偿仅靠缩放无法恢复的失真
-        residual = self.residual_head(fused_hidden)
+        residual = self.residual_scale * self.residual_head(fused_hidden)
         # 先做 band-wise reweight，再加 residual 形成最终增强特征
         weighted = band_weights * codec_fbank
         enhanced = weighted + residual

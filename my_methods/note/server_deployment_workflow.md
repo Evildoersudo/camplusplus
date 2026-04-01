@@ -1,6 +1,6 @@
 # CA-AFC 服务器部署与运行流程
 
-> 统一说明：可执行命令以 `note/container_linux_runbook.md` 为唯一版本；本文件保留流程说明与背景信息。
+> 统一说明：本文件维护当前服务器实跑命令。每次新增或修改脚本后，需同步把可执行命令更新到本文件对应章节。
 
 本文档按当前 DGX Spark + Docker 方案整理，默认约定如下：
 
@@ -263,8 +263,8 @@ python my_methods/scripts/train_ca_afc.py \
   --max_frames 300 \
   --batch_size 64 \
   --num_workers 4 \
-  --pretrain_epochs 15 \
-  --finetune_epochs 20 \
+  --pretrain_epochs 5 \
+  --finetune_epochs 10 \
   --optimizer adamw \
   --lr 1e-3 \
   --weight_decay 1e-4 \
@@ -277,6 +277,36 @@ python my_methods/scripts/train_ca_afc.py \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
   --device cuda
+```
+
+当前版本建议先用“稳定收敛 + 可观测诊断”配置（含梯度探针与 finetune codec 加权采样）：
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --max_frames 300 \
+  --batch_size 64 \
+  --num_workers 4 \
+  --pretrain_epochs 15 \
+  --finetune_epochs 20 \
+  --optimizer adamw \
+  --lr 1e-3 \
+  --weight_decay 1e-4 \
+  --scheduler none \
+  --grad_clip_norm 5.0 \
+  --log_interval 20 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
+  --emb_term_target_ratio 0.10 \
+  --emb_lambda_scale_max 20.0 \
+  --grad_probe_interval 100 \
+  --finetune_codec_weights clean=0.4,aac=1.0,opus=1.5,amrwb=1.8 \
+  --device cuda 2>&1 | tee my_methods/exp/ca_afc_cnceleb_fixedrate/train.log
 ```
 
 如果要做 `SGD + momentum` 对照实验：
@@ -332,6 +362,38 @@ python my_methods/scripts/train_ca_afc.py \
   --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
   --resume \
   --device cuda
+```
+
+## 7.2 训练日志自动汇总与收敛曲线
+
+使用脚本：
+
+- `my_methods/tools/summarize_train_log.py`
+
+功能：
+
+- 从 `train.log` 提取每个 epoch 的 `loss / rec_loss / emb_loss / emb/rec / grad_emb/rec / lr`
+- 终端打印统计表
+- 导出 JSON
+- 生成收敛曲线 PNG
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/tools/summarize_train_log.py \
+  --log my_methods/exp/ca_afc_cnceleb_fixedrate/train.log \
+  --split both \
+  --trend_width 30 \
+  --json_out my_methods/exp/ca_afc_cnceleb_fixedrate/epoch_curve_summary.json \
+  --plot_dir my_methods/exp/ca_afc_cnceleb_fixedrate/plots
+```
+
+仅查看训练集统计：
+
+```bash
+python my_methods/tools/summarize_train_log.py \
+  --log my_methods/exp/ca_afc_cnceleb_fixedrate/train.log \
+  --split train
 ```
 
 ## 8. 直接从音频训练（可选）
@@ -431,14 +493,16 @@ python my_methods/scripts/train_ca_afc.py \
   --optimizer adamw \
   --lr 1e-3 \
   --weight_decay 1e-4 \
-  --scheduler cosine \
-  --warmup_steps 1000 \
-  --min_lr 1e-5 \
+  --scheduler none \
   --grad_clip_norm 5.0 \
   --log_interval 20 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
+  --emb_term_target_ratio 0.10 \
+  --emb_lambda_scale_max 20.0 \
+  --grad_probe_interval 100 \
+  --finetune_codec_weights clean=0.4,aac=1.0,opus=1.5,amrwb=1.8 \
   --device cuda 2>&1 | tee my_methods/exp/ca_afc_cnceleb_fixedrate/train.log
 ```
 
