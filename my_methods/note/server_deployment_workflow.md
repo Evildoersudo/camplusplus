@@ -241,6 +241,8 @@ python -u my_methods/scripts/train_ca_afc.py \
   --min_lr 1e-5 \
   --grad_clip_norm 5.0 \
   --log_interval 1 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
@@ -277,6 +279,8 @@ python my_methods/scripts/train_ca_afc.py \
   --min_lr 1e-5 \
   --grad_clip_norm 5.0 \
   --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
@@ -303,6 +307,8 @@ python my_methods/scripts/train_ca_afc.py \
   --scheduler none \
   --grad_clip_norm 5.0 \
   --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
@@ -339,6 +345,8 @@ python my_methods/scripts/train_ca_afc.py \
   --min_lr 1e-4 \
   --grad_clip_norm 5.0 \
   --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \
@@ -508,6 +516,8 @@ python my_methods/scripts/train_ca_afc.py \
   --scheduler none \
   --grad_clip_norm 5.0 \
   --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
   --lambda_smooth 0.01 \

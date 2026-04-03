@@ -68,3 +68,5 @@ egs/3dspeaker/sv-cam++/data
 tmp/
 temp/
 *.tmp
+*.wav
+*.opus

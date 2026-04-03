@@ -172,10 +172,14 @@ class AttentiveFusion(nn.Module):
 class TimeFrequencyAttention(nn.Module):
     """Generate frame-wise frequency and temporal reliability weights."""
 
-    def __init__(self, hidden_dim: int = 64):
+    def __init__(self, hidden_dim: int = 64, feat_dim: int = 80, time_scale: float = 0.0):
         super().__init__()
+        self.time_scale = float(time_scale)
         self.aux_to_chan = nn.Linear(hidden_dim, hidden_dim)
+        self.aux_to_band = nn.Linear(hidden_dim, feat_dim)
         self.band_head = nn.Conv2d(hidden_dim, 1, kernel_size=1)
+        # Learnable frequency positional bias to stabilize per-band weighting.
+        self.freq_pos_bias = nn.Parameter(torch.zeros(1, 1, feat_dim))
         self.time_head = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(inplace=True),
@@ -191,10 +195,12 @@ class TimeFrequencyAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         aux_bias = self.aux_to_chan(aux_hidden).transpose(1, 2).unsqueeze(-1)
         band_logits = self.band_head(tf_hidden + aux_bias).squeeze(1)
+        band_logits = band_logits + self.aux_to_band(aux_hidden) + self.freq_pos_bias
         band_weights = 1.0 + band_scale * torch.tanh(band_logits)
 
         time_logits = self.time_head(torch.cat([fused_hidden, aux_hidden], dim=-1))
-        time_weights = torch.sigmoid(time_logits)
+        # Residual-style temporal reliability keeps weights close to 1 by default.
+        time_weights = 1.0 + self.time_scale * torch.tanh(time_logits)
         return band_weights, time_weights
 
 
@@ -217,7 +223,7 @@ class CAAFCFrontend(nn.Module):
     3. AttentiveFusion 做门控融合
     4. band_attention 预测逐频带权重
     5. residual_head 预测残差补偿
-    6. enhanced = band_weights * codec_fbank + residual
+    6. enhanced = codec_fbank + (band_delta + residual) * time_weights
 
     这样设计的好处是：
     - 保留原始 codec FBank 的主体结构
@@ -231,8 +237,10 @@ class CAAFCFrontend(nn.Module):
         aux_dim: int = 3,
         hidden_dim: int = 64,
         dropout: float = 0.1,
-        band_scale: float = 1.0,
-        residual_scale: float = 0.1,
+        band_scale: float = 0.3,
+        residual_scale: float = 0.05,
+        band_residual_scale: float = 1.0,
+        time_scale: float = 0.0,
         num_codecs: int = 8,
         codec_emb_dim: int = 16,
     ):
@@ -242,6 +250,7 @@ class CAAFCFrontend(nn.Module):
         self.hidden_dim = hidden_dim
         self.band_scale = float(band_scale)
         self.residual_scale = float(residual_scale)
+        self.band_residual_scale = float(band_residual_scale)
 
         self.spectral_encoder = SpectralEncoder(hidden_dim=hidden_dim)
         self.codec_modulation = CodecConditionModulation(
@@ -251,7 +260,11 @@ class CAAFCFrontend(nn.Module):
         )
         self.aux_encoder = AuxEncoder(aux_dim=aux_dim, hidden_dim=hidden_dim)
         self.fusion = AttentiveFusion(hidden_dim=hidden_dim)
-        self.tf_attention = TimeFrequencyAttention(hidden_dim=hidden_dim)
+        self.tf_attention = TimeFrequencyAttention(
+            hidden_dim=hidden_dim,
+            feat_dim=feat_dim,
+            time_scale=time_scale,
+        )
         self.dropout = nn.Dropout(dropout)
 
         # 残差补偿头：学习在加权后的 FBank 上额外补偿多少
@@ -285,10 +298,10 @@ class CAAFCFrontend(nn.Module):
         )
         # 残差项，用于补偿仅靠缩放无法恢复的失真
         residual = self.residual_scale * self.residual_head(fused_hidden)
-        # 先做 band-wise + temporal reweight，再加 residual 形成最终增强特征
-        weighted = band_weights * codec_fbank
-        weighted = weighted * time_weights
-        enhanced = weighted + residual
+        # Use conservative delta-style enhancement to avoid damaging clean speech.
+        band_delta = self.band_residual_scale * (band_weights - 1.0) * codec_fbank
+        delta = (band_delta + residual) * time_weights
+        enhanced = codec_fbank + delta
 
         return FrontendOutput(
             enhanced=enhanced,
