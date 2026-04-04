@@ -127,6 +127,18 @@
 
 这样可以确保训练与评测的 clean/coded 是同源一一对应对。
 
+### 4.2 训练加速：manifest 分层抽样
+
+当全量音频训练过慢时，可直接在 manifest 层做抽样，避免重做音频转码：
+
+- 在线抽样（训练时）：
+  - train_sv_codec_restore_gan.py 支持 train_sample_fraction / valid_sample_fraction
+  - 默认支持按 speaker 分层抽样（train_stratified_sample / valid_stratified_sample）
+- 离线抽样（切分时）：
+  - split_sv_manifest_by_speaker.py 支持 train_fraction / valid_fraction + --stratified
+
+推荐先用 1/4 抽样（0.25）做快速迭代，再回到全量训练。
+
 ## 5. 评测
 
 - 文件：scripts/eval_sv_codec_restore_gan.py
@@ -137,7 +149,7 @@
 ## 6. 现有依赖路径
 
 - ESPnet：my_methods_GAN/espnet
-- WavLM 权重：my_methods_GAN/pretrained/WavLM/WavLM-Base.pt
+- WavLM 权重：my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt
 - WavLM 调用参考：my_methods_GAN/pretrained/WavLM/WavLM_use.py
 
 说明：若本地 WavLM.py 不在 my_methods_GAN/pretrained/WavLM 下，请补齐后再运行 phase3。

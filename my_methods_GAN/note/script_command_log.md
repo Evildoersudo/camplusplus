@@ -22,6 +22,20 @@
   - my_methods_GAN/scripts/build_sv_codec_manifest.py
 - 2026-04-03: 修改脚本并更新命令（AdamW + 线性热身余弦退火）
   - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 2026-04-04: 修改脚本并更新命令（manifest 分层抽样）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/scripts/split_sv_manifest_by_speaker.py
+- 2026-04-04: 修改脚本并更新命令（断点续训 resume）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 2026-04-04: 修改脚本并更新命令（续训阶段边界修复）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 2026-04-04: 修改脚本并更新命令（WavLM 改为 HuggingFace from_pretrained）
+  - my_methods_GAN/sv_codec_restore_gan/models/wavlm_wrapper.py
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-04: 修改脚本并更新命令（按 improved_2：phase-local LR + 双验证指标）
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
 
 ## 0. 环境准备
 
@@ -56,9 +70,13 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --phase1_epochs 10 \
   --phase2_epochs 10 \
   --phase3_epochs 10 \
-  --batch_size 4 \
-  --num_workers 2 \
+  --batch_size 24 \
+  --num_workers 8 \
   --segment_seconds 2.0 \
+  --train_sample_fraction 1.0 \
+  --valid_sample_fraction 1.0 \
+  --train_stratified_sample \
+  --valid_stratified_sample \
   --emb_dim 48 \
   --num_blocks 5 \
   --hidden_units 100 \
@@ -71,9 +89,131 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --warmup_steps_d 1000 \
   --weight_decay 1e-4 \
   --grad_clip 5.0 \
-  --wavlm_root /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM \
-  --wavlm_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM/WavLM-Base.pt \
-  --campplus_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --wavlm_root my_methods_GAN/pretrained/WavLM \
+  --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --device cuda
+```
+
+推荐配置 A-1（仅用 1/4 训练数据，在线分层抽样）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_main_q25 \
+  --phase1_epochs 5 \
+  --phase2_epochs 5 \
+  --phase3_epochs 5 \
+  --batch_size 24 \
+  --num_workers 8 \
+  --segment_seconds 2.0 \
+  --train_sample_fraction 0.25 \
+  --valid_sample_fraction 0.25 \
+  --train_stratified_sample \
+  --valid_stratified_sample \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --lr_g_max 5e-4 \
+  --lr_g_min 5e-6 \
+  --lr_d_max 1e-4 \
+  --lr_d_min 1e-6 \
+  --warmup_steps_g 1000 \
+  --warmup_steps_d 1000 \
+  --weight_decay 1e-4 \
+  --grad_clip 5.0 \
+  --wavlm_root my_methods_GAN/pretrained/WavLM \
+  --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --device cuda
+```
+
+断点续训（自动加载 output_dir/checkpoints 下最新 epoch_*.pt）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_main_q25 \
+  --phase1_epochs 5 \
+  --phase2_epochs 5 \
+  --phase3_epochs 5 \
+  --batch_size 24 \
+  --num_workers 8 \
+  --segment_seconds 2.0 \
+  --train_sample_fraction 0.25 \
+  --valid_sample_fraction 0.25 \
+  --train_stratified_sample \
+  --valid_stratified_sample \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --lr_g_max 5e-4 \
+  --lr_g_min 5e-6 \
+  --lr_d_max 1e-4 \
+  --lr_d_min 1e-6 \
+  --warmup_steps_g 1000 \
+  --warmup_steps_d 1000 \
+  --weight_decay 1e-4 \
+  --grad_clip 5.0 \
+  --wavlm_root my_methods_GAN/pretrained/WavLM \
+  --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --resume \
+  --device cuda
+```
+
+说明：默认续训会沿用 checkpoint 保存时的 phase 配置（修复阶段跳变问题）。
+
+说明（improved_2 对齐）：
+
+- 默认关闭 CAMP++ 训练损失（`--no_use_campplus_train_loss`），避免非可微 FBank 路径参与主训练目标。
+- 默认开启验证说话人指标（`--valid_sv_metric`），训练日志同时输出 `valid_rec` 与 `sv_cos`。
+- 学习率调度已改为 phase-local warmup-cosine，每个 phase 内独立计步。
+
+若你确实要用当前命令中的 phase 参数覆盖 checkpoint，请显式追加：
+
+```bash
+--resume_use_current_phase_config
+```
+
+断点续训（指定 checkpoint）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_main_q25 \
+  --phase1_epochs 0 \
+  --phase2_epochs 5 \
+  --phase3_epochs 5 \
+  --batch_size 24 \
+  --num_workers 8 \
+  --segment_seconds 2.0 \
+  --train_sample_fraction 0.25 \
+  --valid_sample_fraction 0.25 \
+  --train_stratified_sample \
+  --valid_stratified_sample \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --lr_g_max 5e-4 \
+  --lr_g_min 5e-6 \
+  --lr_d_max 1e-4 \
+  --lr_d_min 1e-6 \
+  --warmup_steps_g 1000 \
+  --warmup_steps_d 1000 \
+  --weight_decay 1e-4 \
+  --grad_clip 5.0 \
+  --wavlm_root my_methods_GAN/pretrained/WavLM \
+  --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --resume \
+  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_main_q25/checkpoints/epoch_005.pt \
   --device cuda
 ```
 
@@ -103,9 +243,53 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --weight_decay 1e-4 \
   --grad_clip 5.0 \
   --wavlm_root /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM \
-  --wavlm_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM/WavLM-Base.pt \
+  --wavlm_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
   --campplus_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
   --device cuda
+```
+
+WavLM（HuggingFace）加载参数说明：
+
+```bash
+--wavlm_model_id microsoft/wavlm-base-plus-sv
+--wavlm_cache_dir /path/to/hf_cache   # 可选
+```
+
+本地 WavLM 脚本加载（当前默认）要求：
+
+```bash
+my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt
+```
+
+若在线 HuggingFace 连接受限，可将 `--wavlm_model_id` 指向本地 HF 格式目录（仍通过 from_pretrained 加载）：
+
+```bash
+--wavlm_model_id /workspace/camplusplus/my_methods_GAN/pretrained/WavLM/wavlm-base-plus-sv
+```
+
+WavLM 冒烟验证（已实测可进入训练并完成 1 epoch）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_wavlm_hf_smoke \
+  --phase1_epochs 0 \
+  --phase2_epochs 0 \
+  --phase3_epochs 1 \
+  --batch_size 1 \
+  --num_workers 0 \
+  --segment_seconds 2.0 \
+  --phase3_segment_seconds 2.0 \
+  --train_sample_fraction 0.0004 \
+  --valid_sample_fraction 0.0004 \
+  --no_train_stratified_sample \
+  --no_valid_stratified_sample \
+  --phase3_use_wavlm \
+  --phase3_no_gan \
+  --wavlm_model_id /workspace/camplusplus/my_methods_GAN/pretrained/WavLM/wavlm-base-plus-sv \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --device cpu
 ```
 
 ## 3. 评测 clean/coded/restored 的 EER/minDCF
@@ -114,11 +298,11 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
 
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
-  --clean_wav_scp /path/to/test_clean_wav.scp \
-  --coded_wav_scp /path/to/test_coded_wav.scp \
-  --trials_file /path/to/test_trials.txt \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_main/best_generator.pt \
-  --campplus_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_main_q25/best_generator.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
   --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results.json \
   --device cuda
 ```
@@ -179,6 +363,20 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
   --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest.csv \
   --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest.csv \
   --valid_ratio 0.1 \
+  --seed 42
+```
+
+按 speaker 切分并离线抽样 1/4（分层）：
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore/pair_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --valid_ratio 0.1 \
+  --train_fraction 0.25 \
+  --valid_fraction 0.25 \
+  --stratified \
   --seed 42
 ```
 

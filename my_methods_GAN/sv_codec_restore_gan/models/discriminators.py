@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 
 class _ConvDisc1D(nn.Module):
@@ -53,11 +54,24 @@ class MultiBandDiscriminator(nn.Module):
         self.mid = _ConvDisc1D()
         self.high = _ConvDisc1D()
 
+    @staticmethod
+    def _match_length(x: torch.Tensor, target_len: int) -> torch.Tensor:
+        cur = x.shape[-1]
+        if cur > target_len:
+            return x[..., :target_len]
+        if cur < target_len:
+            return F.pad(x, (0, target_len - cur))
+        return x
+
     def _split_bands(self, wav: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Lightweight proxy bands by decimation and residuals.
+        target_len = wav.shape[-1]
         low = nn.functional.avg_pool1d(wav.unsqueeze(1), kernel_size=4, stride=1, padding=2).squeeze(1)
+        low = self._match_length(low, target_len)
         mid = wav - low
-        high = mid - nn.functional.avg_pool1d(mid.unsqueeze(1), kernel_size=2, stride=1, padding=1).squeeze(1)
+        high_smooth = nn.functional.avg_pool1d(mid.unsqueeze(1), kernel_size=2, stride=1, padding=1).squeeze(1)
+        high_smooth = self._match_length(high_smooth, target_len)
+        high = mid - high_smooth
         return low, mid, high
 
     def forward(self, wav: torch.Tensor) -> list[tuple[torch.Tensor, list[torch.Tensor]]]:

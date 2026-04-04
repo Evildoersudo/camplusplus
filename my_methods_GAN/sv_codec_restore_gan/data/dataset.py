@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import random
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +37,28 @@ def _read_manifest(path: str | Path) -> list[PairRow]:
     return rows
 
 
+def _sample_rows_by_speaker(rows: list[PairRow], fraction: float, seed: int) -> list[PairRow]:
+    if fraction >= 1.0:
+        return rows
+    if fraction <= 0.0:
+        raise ValueError("sample_fraction must be in (0, 1].")
+
+    rng = random.Random(seed)
+    buckets: dict[str, list[PairRow]] = defaultdict(list)
+    for row in rows:
+        buckets[row.spk_id].append(row)
+
+    sampled: list[PairRow] = []
+    for spk, items in buckets.items():
+        local = items[:]
+        rng.shuffle(local)
+        keep = max(1, int(len(local) * fraction))
+        sampled.extend(local[:keep])
+
+    rng.shuffle(sampled)
+    return sampled
+
+
 class SVCodecPairDataset(Dataset):
     def __init__(
         self,
@@ -42,8 +66,21 @@ class SVCodecPairDataset(Dataset):
         sample_rate: int = 16000,
         segment_seconds: float = 2.0,
         random_crop: bool = True,
+        sample_fraction: float = 1.0,
+        sample_seed: int = 42,
+        stratified_sample: bool = True,
     ):
-        self.rows = _read_manifest(manifest_csv)
+        rows = _read_manifest(manifest_csv)
+        if sample_fraction < 1.0:
+            if stratified_sample:
+                rows = _sample_rows_by_speaker(rows, sample_fraction, sample_seed)
+            else:
+                rng = random.Random(sample_seed)
+                shuffled = rows[:]
+                rng.shuffle(shuffled)
+                keep = max(1, int(len(shuffled) * sample_fraction))
+                rows = shuffled[:keep]
+        self.rows = rows
         self.sample_rate = int(sample_rate)
         self.segment_len = int(sample_rate * segment_seconds)
         self.random_crop = bool(random_crop)

@@ -3,8 +3,6 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from sv_codec_restore_gan.utils.audio import to_16k, to_48k
-
 
 class GridNetBlock(nn.Module):
     def __init__(self, channels: int, hidden: int = 100, heads: int = 4):
@@ -16,8 +14,11 @@ class GridNetBlock(nn.Module):
         )
         self.time_gru = nn.GRU(input_size=channels, hidden_size=hidden, batch_first=True, bidirectional=True)
         self.time_proj = nn.Linear(hidden * 2, channels)
+        self.freq_gru = nn.GRU(input_size=channels, hidden_size=hidden, batch_first=True, bidirectional=True)
+        self.freq_proj = nn.Linear(hidden * 2, channels)
         self.attn = nn.MultiheadAttention(embed_dim=channels, num_heads=heads, batch_first=True)
-        self.norm = nn.LayerNorm(channels)
+        self.norm_t = nn.LayerNorm(channels)
+        self.norm_f = nn.LayerNorm(channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, C, T, F]
@@ -25,27 +26,34 @@ class GridNetBlock(nn.Module):
         x = x + self.freq_conv(x)
 
         b, c, t, f = x.shape
-        xt = x.mean(dim=-1).transpose(1, 2)  # [B, T, C]
+        xt = x.permute(0, 3, 2, 1).contiguous().view(b * f, t, c)  # [B*F, T, C]
         xt, _ = self.time_gru(xt)
         xt = self.time_proj(xt)
         xa, _ = self.attn(xt, xt, xt, need_weights=False)
-        xt = self.norm(xt + xa)
-        xt = xt.transpose(1, 2).unsqueeze(-1)  # [B, C, T, 1]
+        xt = self.norm_t(xt + xa)
+        xt = xt.view(b, f, t, c).permute(0, 3, 2, 1).contiguous()
         x = x + xt
+
+        xf = x.permute(0, 2, 3, 1).contiguous().view(b * t, f, c)  # [B*T, F, C]
+        xf, _ = self.freq_gru(xf)
+        xf = self.freq_proj(xf)
+        xf = self.norm_f(xf)
+        xf = xf.view(b, t, f, c).permute(0, 3, 1, 2).contiguous()
+        x = x + xf
         return x + residual
 
 
 class SVCodecRestoreGenerator(nn.Module):
     """CWS-TF-GridNet-style generator for codec restoration.
 
-    Internal processing is done at 48 kHz and returns 16 kHz waveform.
+    Internal processing is done directly at 16 kHz.
     """
 
     def __init__(
         self,
-        n_fft: int = 1536,
-        hop_length: int = 768,
-        win_length: int = 1536,
+        n_fft: int = 512,
+        hop_length: int = 128,
+        win_length: int = 512,
         emb_dim: int = 48,
         num_blocks: int = 5,
         hidden_units: int = 100,
@@ -58,11 +66,11 @@ class SVCodecRestoreGenerator(nn.Module):
         self.win_length = win_length
         self.cws_subbands = cws_subbands
 
-        self.in_proj = nn.Conv2d(2, emb_dim, kernel_size=1)
+        self.in_proj = nn.Conv2d(2 * cws_subbands, emb_dim, kernel_size=1)
         self.blocks = nn.ModuleList(
             [GridNetBlock(emb_dim, hidden=hidden_units, heads=attn_heads) for _ in range(num_blocks)]
         )
-        self.out_proj = nn.Conv2d(emb_dim, 2, kernel_size=1)
+        self.out_proj = nn.Conv2d(emb_dim, 2 * cws_subbands, kernel_size=1)
 
     def _stft_ri(self, wav: torch.Tensor) -> torch.Tensor:
         window = torch.hann_window(self.win_length, device=wav.device)
@@ -91,28 +99,34 @@ class SVCodecRestoreGenerator(nn.Module):
             length=length,
         )
 
-    def _cws_split(self, x: torch.Tensor) -> list[torch.Tensor]:
-        # Split frequency bins into contiguous subbands.
-        return list(torch.chunk(x, self.cws_subbands, dim=-1))
+    def _pad_freq(self, x: torch.Tensor) -> tuple[torch.Tensor, int]:
+        freq = x.shape[-1]
+        rem = freq % self.cws_subbands
+        if rem == 0:
+            return x, freq
+        pad = self.cws_subbands - rem
+        return nn.functional.pad(x, (0, pad)), freq
 
-    def _cws_merge(self, xs: list[torch.Tensor]) -> torch.Tensor:
-        return torch.cat(xs, dim=-1)
+    def _cws_concat(self, x: torch.Tensor) -> tuple[torch.Tensor, int]:
+        x_pad, orig_freq = self._pad_freq(x)
+        chunks = torch.chunk(x_pad, self.cws_subbands, dim=-1)
+        x_cat = torch.cat(chunks, dim=1)
+        return x_cat, orig_freq
+
+    def _cws_merge(self, x: torch.Tensor, orig_freq: int) -> torch.Tensor:
+        chunks = torch.chunk(x, self.cws_subbands, dim=1)
+        merged = torch.cat(chunks, dim=-1)
+        return merged[..., :orig_freq]
 
     def forward(self, coded_16k: torch.Tensor) -> torch.Tensor:
-        # 16k -> 48k internal processing
-        coded_48k = to_48k(coded_16k)
-        x = self._stft_ri(coded_48k)
+        x = self._stft_ri(coded_16k)
+        x_cws, orig_freq = self._cws_concat(x)
 
-        subbands = self._cws_split(x)
-        out_subbands = []
-        for s in subbands:
-            h = self.in_proj(s)
-            for blk in self.blocks:
-                h = blk(h)
-            out_subbands.append(self.out_proj(h))
+        h = self.in_proj(x_cws)
+        for blk in self.blocks:
+            h = blk(h)
+        pred_ri_cws = self.out_proj(h)
 
-        pred_ri = self._cws_merge(out_subbands)
-        pred_res_48k = self._istft_ri(pred_ri, length=coded_48k.shape[-1])
-        restored_48k = coded_48k + pred_res_48k
-        restored_16k = to_16k(restored_48k)
-        return restored_16k
+        pred_ri = self._cws_merge(pred_ri_cws, orig_freq)
+        pred_res = self._istft_ri(pred_ri, length=coded_16k.shape[-1])
+        return coded_16k + pred_res

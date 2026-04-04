@@ -12,6 +12,19 @@ class WavLMFeatureExtractor(torch.nn.Module):
         super().__init__()
         wavlm_root = Path(wavlm_root).resolve()
         checkpoint_path = Path(checkpoint_path).resolve()
+
+        required_files = ["WavLM.py", "modules.py"]
+        missing = [name for name in required_files if not (wavlm_root / name).is_file()]
+        if missing:
+            missing_text = ", ".join(missing)
+            raise ImportError(
+                f"Missing WavLM source files in {wavlm_root}: {missing_text}. "
+                "Download them from https://github.com/microsoft/unilm/tree/master/wavlm "
+                "or run:\n"
+                f"  curl -fsSL https://raw.githubusercontent.com/microsoft/unilm/master/wavlm/WavLM.py -o {wavlm_root / 'WavLM.py'}\n"
+                f"  curl -fsSL https://raw.githubusercontent.com/microsoft/unilm/master/wavlm/modules.py -o {wavlm_root / 'modules.py'}"
+            )
+
         if str(wavlm_root) not in sys.path:
             sys.path.insert(0, str(wavlm_root))
 
@@ -33,10 +46,9 @@ class WavLMFeatureExtractor(torch.nn.Module):
         self.model = model
         self.cfg = cfg
 
-    @torch.no_grad()
     def forward(self, wav16k: torch.Tensor) -> torch.Tensor:
         x = wav16k
         if getattr(self.cfg, "normalize", False):
             x = F.layer_norm(x, x.shape[-1:])
         rep = self.model.extract_features(x)[0]  # [B, T, D]
-        return rep.mean(dim=1)
+        return rep
