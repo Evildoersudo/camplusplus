@@ -40,7 +40,7 @@ class GridNetBlock(nn.Module):
         xf = self.norm_f(xf)
         xf = xf.view(b, t, f, c).permute(0, 3, 1, 2).contiguous()
         x = x + xf
-        return x + residual
+        return x
 
 
 class SVCodecRestoreGenerator(nn.Module):
@@ -71,15 +71,16 @@ class SVCodecRestoreGenerator(nn.Module):
             [GridNetBlock(emb_dim, hidden=hidden_units, heads=attn_heads) for _ in range(num_blocks)]
         )
         self.out_proj = nn.Conv2d(emb_dim, 2 * cws_subbands, kernel_size=1)
+        # Cache STFT window to avoid per-step allocations.
+        self.register_buffer("_stft_window", torch.hann_window(self.win_length), persistent=False)
 
     def _stft_ri(self, wav: torch.Tensor) -> torch.Tensor:
-        window = torch.hann_window(self.win_length, device=wav.device)
         spec = torch.stft(
             wav,
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             win_length=self.win_length,
-            window=window,
+            window=self._stft_window,
             return_complex=True,
         )
         ri = torch.stack([spec.real, spec.imag], dim=1)  # [B, 2, F, T]
@@ -89,13 +90,12 @@ class SVCodecRestoreGenerator(nn.Module):
         # ri: [B,2,T,F]
         x = ri.permute(0, 1, 3, 2).contiguous()  # [B,2,F,T]
         spec = torch.complex(x[:, 0], x[:, 1])
-        window = torch.hann_window(self.win_length, device=ri.device)
         return torch.istft(
             spec,
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             win_length=self.win_length,
-            window=window,
+            window=self._stft_window,
             length=length,
         )
 

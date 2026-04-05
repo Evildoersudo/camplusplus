@@ -1,3 +1,47 @@
+### 1.1启动并进入容器
+
+```bash
+cd ~/lkj/camplusplus
+docker compose up -d
+docker compose exec camplusplus bash
+```
+
+### 1.2 容器内验证
+
+先确认 `torch/torchaudio`：
+
+```bash
+python -c "import torch, torchaudio; print(torch.__version__); print(torchaudio.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
+```
+
+再确认 `ffmpeg` 编码器：
+
+```bash
+ffmpeg -hide_banner -encoders | grep -E 'libopus|aac|libvo_amrwbenc|pcm_alaw|pcm_mulaw'
+```
+## 推荐 Rec-only baseline 实验命令（按改进建议）
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest ... \
+  --valid_manifest ... \
+  --output_dir ... \
+  --phase1_epochs 8 \
+  --phase2_epochs 0 \
+  --phase3_epochs 0 \
+  --batch_size 24 \
+  --segment_seconds 2.0 \
+  --complex_weight 0.0 \
+  --warmup_steps_g 200 \
+  --no_valid_sv_metric \
+  --lr_g_max 3e-4 \
+  --lr_g_min 1e-5
+```
+
+说明：
+- `--complex_weight 0.0` 关闭 complex loss，便于 loss 快速下降。
+- `--warmup_steps_g 200` 缩短 warmup。
+- `--no_valid_sv_metric` 关闭验证说话人指标，专注 rec-only。
 # 脚本调用命令记录（统一维护）
 
 本文件用于统一记录 my_methods_GAN 下脚本调用命令。
@@ -36,6 +80,12 @@
 - 2026-04-04: 修改脚本并更新命令（按 improved_2：phase-local LR + 双验证指标）
   - my_methods_GAN/sv_codec_restore_gan/train/engine.py
   - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 2026-04-04: 新增实验命令（Experiment A: Rec-only baseline）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 2026-04-04: 新增脚本并登记命令（绘制 train.log 的 avg_train 曲线）
+  - my_methods_GAN/scripts/plot_train_avg_curve.py
+- 2026-04-05: 修改脚本并更新命令（评测 restored 分块推理 + CUDA OOM 自动缩块重试）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
 
 ## 0. 环境准备
 
@@ -174,6 +224,40 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
 - 默认开启验证说话人指标（`--valid_sv_metric`），训练日志同时输出 `valid_rec` 与 `sv_cos`。
 - 学习率调度已改为 phase-local warmup-cosine，每个 phase 内独立计步。
 
+Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25 \
+  --phase1_epochs 25 \
+  --phase2_epochs 0 \
+  --phase3_epochs 0 \
+  --batch_size 28 \
+  --num_workers 8 \
+  --segment_seconds 3.0 \
+  --train_sample_fraction 1.0 \
+  --valid_sample_fraction 1.0 \
+  --train_stratified_sample \
+  --valid_stratified_sample \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --lr_g_max 3e-4 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 1000 \
+  --weight_decay 1e-4 \
+  --grad_clip 5.0 \
+  --complex_weight 0.0 \
+  --no_valid_sv_metric \
+  --wavlm_root my_methods_GAN/pretrained/WavLM \
+  --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --device cuda
+```
+
 若你确实要用当前命令中的 phase 参数覆盖 checkpoint，请显式追加：
 
 ```bash
@@ -301,10 +385,45 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_main_q25/best_generator.pt \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
   --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results.json \
+  --restore_chunk_seconds 8 \
+  --restore_overlap_seconds 0.5 \
+  --restore_auto_shrink \
+  --restore_min_chunk_seconds 1.0 \
+  --restore_chunk_shrink_factor 0.7 \
   --device cuda
+```
+
+参数说明：
+
+- `--restore_chunk_seconds`：restored 路径分块长度（秒），默认 8。
+- `--restore_overlap_seconds`：相邻块重叠长度（秒），默认 0.5。
+- `--restore_auto_shrink`：遇到 CUDA OOM 自动缩小 chunk 并重试（默认开启）。
+- `--restore_min_chunk_seconds`：自动缩块最小下限（秒），默认 1.0。
+- `--restore_chunk_shrink_factor`：每次 OOM 后的缩放比例，默认 0.7。
+
+## 3.1 绘制 train.log 的 avg_train 曲线（按步长抽样）
+
+脚本：my_methods_GAN/scripts/plot_train_avg_curve.py
+
+每 40 个 step 取一个点：
+
+```bash
+python my_methods_GAN/scripts/plot_train_avg_curve.py \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/train.log \
+  --sample_every 40 \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/avg_train_curve_s40.png
+```
+
+每 60 个 step 取一个点：
+
+```bash
+python my_methods_GAN/scripts/plot_train_avg_curve.py \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_fast/train.log \
+  --sample_every 60 \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_fast/avg_train_curve_s60.png
 ```
 
 ## 4. 模块入口说明（非直接脚本）

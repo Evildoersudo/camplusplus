@@ -4,11 +4,26 @@ import torch
 import torch.nn.functional as F
 
 
+_WINDOW_CACHE: dict[tuple[str, int], torch.Tensor] = {}
+
+
+def _get_hann_window(n_fft: int, device: torch.device) -> torch.Tensor:
+    key = (str(device), int(n_fft))
+    window = _WINDOW_CACHE.get(key)
+    if window is None:
+        window = torch.hann_window(n_fft, device=device)
+        _WINDOW_CACHE[key] = window
+    return window
+
+
 def _safe_log(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return torch.log(x.clamp_min(eps))
 
 
 def loss_si_sdr(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    pred = pred - pred.mean(dim=-1, keepdim=True)
+    target = target - target.mean(dim=-1, keepdim=True)
+
     target_energy = target.pow(2).sum(dim=-1, keepdim=True).clamp_min(eps)
     scale = (pred * target).sum(dim=-1, keepdim=True) / target_energy
     s_target = scale * target
@@ -25,7 +40,7 @@ def loss_mrstft(
 ) -> torch.Tensor:
     losses = []
     for n_fft, hop, win in resolutions:
-        window = torch.hann_window(win, device=pred.device)
+        window = _get_hann_window(win, pred.device)
         p = torch.stft(pred, n_fft=n_fft, hop_length=hop, win_length=win, window=window, return_complex=True)
         t = torch.stft(target, n_fft=n_fft, hop_length=hop, win_length=win, window=window, return_complex=True)
 
@@ -39,7 +54,7 @@ def loss_mrstft(
 
 
 def loss_complex_l1(pred: torch.Tensor, target: torch.Tensor, n_fft: int = 512, hop: int = 128):
-    window = torch.hann_window(n_fft, device=pred.device)
+    window = _get_hann_window(n_fft, pred.device)
     p = torch.stft(pred, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, return_complex=True)
     t = torch.stft(target, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, return_complex=True)
     return F.l1_loss(p.real, t.real) + F.l1_loss(p.imag, t.imag)

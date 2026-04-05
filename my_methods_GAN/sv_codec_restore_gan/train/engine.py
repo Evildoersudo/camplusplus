@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 from pathlib import Path
 
@@ -121,7 +122,7 @@ def _warmup_cosine_lr(
 
     progress = float(step - warmup_steps) / float(total_steps - warmup_steps)
     progress = max(0.0, min(1.0, progress))
-    cosine = 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
+    cosine = 0.5 * (1.0 + math.cos(progress * math.pi))
     return min_lr + (max_lr - min_lr) * cosine
 
 
@@ -130,6 +131,13 @@ def train_main(args: argparse.Namespace) -> None:
     args.d_update_interval = max(1, int(args.d_update_interval))
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     out_dir = ensure_dir(args.output_dir)
+    log_file = (out_dir / "train.log").open("a", encoding="utf-8")
+
+    def _emit(message: str, also_console: bool = True) -> None:
+        if also_console:
+            print(message)
+        log_file.write(message + "\n")
+        log_file.flush()
 
     train_loader = _build_loader(
         args.train_manifest,
@@ -151,7 +159,7 @@ def train_main(args: argparse.Namespace) -> None:
         args.valid_sample_seed,
         args.valid_stratified_sample,
     )
-    print(
+    _emit(
         "[data] train samples={} valid samples={} (fractions: train={}, valid={})".format(
             len(train_loader.dataset),
             len(valid_loader.dataset),
@@ -212,13 +220,13 @@ def train_main(args: argparse.Namespace) -> None:
                 phase2_epochs = int(prev_args.get("phase2_epochs", phase2_epochs))
                 phase3_epochs = int(prev_args.get("phase3_epochs", phase3_epochs))
                 total_epochs = phase1_epochs + phase2_epochs + phase3_epochs
-                print(
+                _emit(
                     "[resume] keep checkpoint phase config: phase1={}, phase2={}, phase3={}".format(
                         phase1_epochs, phase2_epochs, phase3_epochs
                     )
                 )
         else:
-            print(
+            _emit(
                 "[resume] use current phase config: phase1={}, phase2={}, phase3={}".format(
                     phase1_epochs, phase2_epochs, phase3_epochs
                 )
@@ -240,10 +248,10 @@ def train_main(args: argparse.Namespace) -> None:
         best_sv = float(state.get("best_valid_sv", best_sv))
         resume_epoch = int(state.get("epoch", 0))
         start_epoch = resume_epoch + 1
-        print(f"[resume] loaded checkpoint: {ckpt_path}")
-        print(f"[resume] start_epoch={start_epoch}, global_step={global_step}, d_global_step={d_global_step}")
+        _emit(f"[resume] loaded checkpoint: {ckpt_path}")
+        _emit(f"[resume] start_epoch={start_epoch}, global_step={global_step}, d_global_step={d_global_step}")
     if start_epoch > total_epochs:
-        print(
+        _emit(
             f"[resume] start_epoch ({start_epoch}) > total_epochs ({total_epochs}). Nothing to train."
         )
         return
@@ -291,14 +299,14 @@ def train_main(args: argparse.Namespace) -> None:
 
         need_camp = args.use_campplus_train_loss or args.valid_sv_metric
         if need_camp and camp is None:
-            print("[info] Initializing CAM++ for validation/optional loss...")
+            _emit("[info] Initializing CAM++ for validation/optional loss...")
             camp = FrozenCampPlus(args.campplus_ckpt).to(device)
-            print("[info] CAM++ ready.")
+            _emit("[info] CAM++ ready.")
 
         if phase == "phase3" and args.phase3_use_wavlm and wavlm is None:
-            print("[info] Initializing local WavLM for frame-level distillation...")
+            _emit("[info] Initializing local WavLM for frame-level distillation...")
             wavlm = WavLMFeatureExtractor(args.wavlm_root, args.wavlm_ckpt).to(device)
-            print("[info] WavLM ready.")
+            _emit("[info] WavLM ready.")
 
         generator.train()
         if mrd is not None:
@@ -307,6 +315,9 @@ def train_main(args: argparse.Namespace) -> None:
             mbd.train()
 
         train_loss = 0.0
+        sum_sisdr = 0.0
+        sum_mrstft = 0.0
+        sum_complex = 0.0
         t0 = time.time()
         log_interval = max(1, len(train_loader) // 20)
         for step, batch in enumerate(train_loader, start=1):
@@ -336,6 +347,11 @@ def train_main(args: argparse.Namespace) -> None:
                 complex_weight=args.complex_weight,
             )
             rec_term = args.rec_loss_weight * rec_dict["total"]
+
+            # 分项累计
+            sum_sisdr += float(rec_dict["si_sdr"].detach().cpu())
+            sum_mrstft += float(rec_dict["mrstft"].detach().cpu())
+            sum_complex += float(rec_dict["complex"].detach().cpu())
 
             adv_g = torch.zeros((), device=device)
             feat_g = torch.zeros((), device=device)
@@ -416,14 +432,18 @@ def train_main(args: argparse.Namespace) -> None:
             global_step += 1
             phase_g_step += 1
 
-            if step % log_interval == 0 or step == len(train_loader):
-                avg_train = train_loss / step
-                elapsed = time.time() - t0
-                print(
-                    f"[epoch {epoch:03d}][{phase}] step {step}/{len(train_loader)} "
-                    f"avg_train={avg_train:.4f} lr_g={opt_g.param_groups[0]['lr']:.2e} "
-                    f"elapsed={elapsed:.1f}s"
-                )
+            avg_train = train_loss / step
+            elapsed = time.time() - t0
+            step_message = (
+                f"[epoch {epoch:03d}][{phase}] step {step}/{len(train_loader)} "
+                f"avg_train={avg_train:.4f} "
+                f"si_sdr={sum_sisdr/step:.4f} "
+                f"mrstft={sum_mrstft/step:.4f} "
+                f"complex={sum_complex/step:.4f} "
+                f"lr_g={opt_g.param_groups[0]['lr']:.2e} "
+                f"elapsed={elapsed:.1f}s"
+            )
+            _emit(step_message, also_console=(step % log_interval == 0 or step == len(train_loader)))
 
         train_loss /= max(1, len(train_loader))
 
@@ -499,7 +519,7 @@ def train_main(args: argparse.Namespace) -> None:
         }
         history.append(row)
         sv_msg = f" sv_cos={valid_sv_cos:.4f}" if valid_sv_cos is not None else ""
-        print(
+        _emit(
             f"[epoch {epoch:03d}] phase={phase} train={train_loss:.4f} valid_rec={valid_rec_loss:.4f}{sv_msg} "
             f"time={row['seconds']:.1f}s"
         )

@@ -64,25 +64,132 @@ def fbank_one(wav: torch.Tensor) -> torch.Tensor:
     return feat.unsqueeze(0)
 
 
+def restore_in_chunks(
+    wav: torch.Tensor,
+    generator: SVCodecRestoreGenerator,
+    device: torch.device,
+    chunk_seconds: float,
+    overlap_seconds: float,
+    sample_rate: int = 16000,
+) -> torch.Tensor:
+    chunk_len = int(chunk_seconds * sample_rate)
+    overlap_len = int(overlap_seconds * sample_rate)
+    if chunk_len <= 0 or wav.numel() <= chunk_len:
+        return generator(wav.unsqueeze(0).to(device)).squeeze(0).detach().cpu()
+
+    hop_len = max(1, chunk_len - overlap_len)
+    restored = torch.zeros_like(wav)
+    weight = torch.zeros_like(wav)
+
+    start = 0
+    while start < wav.numel():
+        end = min(start + chunk_len, wav.numel())
+        part = wav[start:end]
+        valid_len = part.numel()
+        if valid_len < chunk_len:
+            part = F.pad(part, (0, chunk_len - valid_len))
+
+        part_out = generator(part.unsqueeze(0).to(device)).squeeze(0).detach().cpu()
+        part_out = part_out[:valid_len]
+        restored[start:end] += part_out
+        weight[start:end] += 1.0
+        start += hop_len
+
+    return restored / weight.clamp_min(1.0)
+
+
+def _is_cuda_oom(exc: RuntimeError) -> bool:
+    msg = str(exc).lower()
+    return "out of memory" in msg or "cuda" in msg and "memory" in msg
+
+
+def restore_in_chunks_adaptive(
+    wav: torch.Tensor,
+    generator: SVCodecRestoreGenerator,
+    device: torch.device,
+    chunk_seconds: float,
+    overlap_seconds: float,
+    min_chunk_seconds: float,
+    chunk_shrink_factor: float,
+    sample_rate: int = 16000,
+) -> torch.Tensor:
+    cur_chunk_seconds = float(chunk_seconds)
+    min_chunk_seconds = max(0.2, float(min_chunk_seconds))
+    chunk_shrink_factor = min(max(0.1, float(chunk_shrink_factor)), 0.95)
+
+    while True:
+        try:
+            return restore_in_chunks(
+                wav=wav,
+                generator=generator,
+                device=device,
+                chunk_seconds=cur_chunk_seconds,
+                overlap_seconds=overlap_seconds,
+                sample_rate=sample_rate,
+            )
+        except RuntimeError as exc:
+            if device.type != "cuda" or not _is_cuda_oom(exc):
+                raise
+
+            next_chunk_seconds = cur_chunk_seconds * chunk_shrink_factor
+            if next_chunk_seconds < min_chunk_seconds:
+                raise RuntimeError(
+                    f"CUDA OOM while restored inference even after shrinking chunk to {cur_chunk_seconds:.2f}s; "
+                    f"min_chunk_seconds={min_chunk_seconds:.2f}s"
+                ) from exc
+
+            print(
+                f"[restored] CUDA OOM at chunk={cur_chunk_seconds:.2f}s, retry with {next_chunk_seconds:.2f}s"
+            )
+            torch.cuda.empty_cache()
+            cur_chunk_seconds = next_chunk_seconds
+
+
 def extract_emb(
     utt2wav: dict[str, str],
     mode: str,
     generator: SVCodecRestoreGenerator,
     camp: FrozenCampPlus,
     device: torch.device,
+    restore_chunk_seconds: float,
+    restore_overlap_seconds: float,
+    restore_auto_shrink: bool,
+    restore_min_chunk_seconds: float,
+    restore_chunk_shrink_factor: float,
 ) -> dict[str, np.ndarray]:
     out = {}
     generator.eval()
     camp.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         for idx, (utt, wav_path) in enumerate(utt2wav.items(), start=1):
-            wav = load_audio_mono(wav_path, sample_rate=16000).to(device)
+            wav = load_audio_mono(wav_path, sample_rate=16000)
             if mode == "restored":
-                wav = generator(wav.unsqueeze(0)).squeeze(0)
+                if restore_auto_shrink:
+                    wav = restore_in_chunks_adaptive(
+                        wav,
+                        generator,
+                        device,
+                        chunk_seconds=restore_chunk_seconds,
+                        overlap_seconds=restore_overlap_seconds,
+                        min_chunk_seconds=restore_min_chunk_seconds,
+                        chunk_shrink_factor=restore_chunk_shrink_factor,
+                        sample_rate=16000,
+                    )
+                else:
+                    wav = restore_in_chunks(
+                        wav,
+                        generator,
+                        device,
+                        chunk_seconds=restore_chunk_seconds,
+                        overlap_seconds=restore_overlap_seconds,
+                        sample_rate=16000,
+                    )
             feat = fbank_one(wav).to(device)
             emb = camp(feat).squeeze(0)
             emb = F.normalize(emb, dim=-1)
             out[utt] = emb.detach().cpu().numpy()
+
+            del wav, feat, emb
             if idx % 200 == 0:
                 print(f"[{mode}] {idx}/{len(utt2wav)}")
     return out
@@ -107,6 +214,13 @@ def parse_args():
     p.add_argument("--generator_ckpt", type=str, required=True)
     p.add_argument("--campplus_ckpt", type=str, required=True)
     p.add_argument("--output_json", type=str, required=True)
+    p.add_argument("--restore_chunk_seconds", type=float, default=8.0, help="Chunk size (seconds) for restored inference. <=0 means full-utterance inference.")
+    p.add_argument("--restore_overlap_seconds", type=float, default=0.5, help="Chunk overlap (seconds) for restored inference.")
+    p.add_argument("--restore_auto_shrink", action="store_true", help="Auto shrink chunk size and retry when restored inference hits CUDA OOM.")
+    p.add_argument("--no_restore_auto_shrink", action="store_false", dest="restore_auto_shrink", help="Disable adaptive chunk shrinking on CUDA OOM.")
+    p.set_defaults(restore_auto_shrink=True)
+    p.add_argument("--restore_min_chunk_seconds", type=float, default=1.0, help="Minimum chunk seconds when auto shrinking is enabled.")
+    p.add_argument("--restore_chunk_shrink_factor", type=float, default=0.7, help="OOM retry shrink factor for chunk seconds in (0,1).")
     p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     return p.parse_args()
 
@@ -132,9 +246,42 @@ def main():
 
     camp = FrozenCampPlus(args.campplus_ckpt).to(device)
 
-    clean_emb = extract_emb(clean_scp, "clean", generator, camp, device)
-    coded_emb = extract_emb(coded_scp, "coded", generator, camp, device)
-    restored_emb = extract_emb(coded_scp, "restored", generator, camp, device)
+    clean_emb = extract_emb(
+        clean_scp,
+        "clean",
+        generator,
+        camp,
+        device,
+        restore_chunk_seconds=args.restore_chunk_seconds,
+        restore_overlap_seconds=args.restore_overlap_seconds,
+        restore_auto_shrink=args.restore_auto_shrink,
+        restore_min_chunk_seconds=args.restore_min_chunk_seconds,
+        restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
+    )
+    coded_emb = extract_emb(
+        coded_scp,
+        "coded",
+        generator,
+        camp,
+        device,
+        restore_chunk_seconds=args.restore_chunk_seconds,
+        restore_overlap_seconds=args.restore_overlap_seconds,
+        restore_auto_shrink=args.restore_auto_shrink,
+        restore_min_chunk_seconds=args.restore_min_chunk_seconds,
+        restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
+    )
+    restored_emb = extract_emb(
+        coded_scp,
+        "restored",
+        generator,
+        camp,
+        device,
+        restore_chunk_seconds=args.restore_chunk_seconds,
+        restore_overlap_seconds=args.restore_overlap_seconds,
+        restore_auto_shrink=args.restore_auto_shrink,
+        restore_min_chunk_seconds=args.restore_min_chunk_seconds,
+        restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
+    )
 
     results = []
     for name, emb in [("clean", clean_emb), ("coded", coded_emb), ("restored", restored_emb)]:
