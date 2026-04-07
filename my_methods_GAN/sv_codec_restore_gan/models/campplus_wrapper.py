@@ -27,7 +27,10 @@ def _unwrap(state):
 def _infer_emb_dim(state_dict: dict) -> int:
     weight = state_dict.get("xvector.dense.linear.weight")
     if weight is None:
-        return 192
+        raise RuntimeError(
+            "CAMPPlus checkpoint missing key 'xvector.dense.linear.weight'; "
+            "cannot infer embedding_size safely."
+        )
     return int(weight.shape[0])
 
 
@@ -37,14 +40,7 @@ class FrozenCampPlus(torch.nn.Module):
         state = torch.load(str(Path(model_path).resolve()), map_location="cpu")
         state_dict = _unwrap(state)
         self.model = CAMPPlus(feat_dim=80, embedding_size=_infer_emb_dim(state_dict))
-        incompatible = self.model.load_state_dict(state_dict, strict=False)
-        if incompatible.missing_keys or incompatible.unexpected_keys:
-            missing = ", ".join(incompatible.missing_keys[:8])
-            unexpected = ", ".join(incompatible.unexpected_keys[:8])
-            raise RuntimeError(
-                "CAMPPlus checkpoint is not fully compatible. "
-                f"missing_keys=[{missing}] unexpected_keys=[{unexpected}]"
-            )
+        self.model.load_state_dict(state_dict, strict=True)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False

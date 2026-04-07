@@ -86,6 +86,14 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/scripts/plot_train_avg_curve.py
 - 2026-04-05: 修改脚本并更新命令（评测 restored 分块推理 + CUDA OOM 自动缩块重试）
   - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-05: 修改脚本并更新命令（评测 embedding 本地缓存：clean/coded/restored 分别缓存）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-05: 修改脚本并更新命令（按说话人导出 embedding npy）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-05: 修改脚本并更新命令（restored 分块批量推理加速）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-06: 新增脚本并登记命令（单脚本评测 CAMP++ on CN-Celeb 全量 eval）
+  - my_methods_GAN/scripts/eval_campplus_cnceleb.py
 
 ## 0. 环境准备
 
@@ -141,7 +149,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --grad_clip 5.0 \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --device cuda
 ```
 
@@ -176,7 +184,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --grad_clip 5.0 \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --device cuda
 ```
 
@@ -211,7 +219,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --grad_clip 5.0 \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --resume \
   --device cuda
 ```
@@ -230,7 +238,7 @@ Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
   --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25 \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second \
   --phase1_epochs 25 \
   --phase2_epochs 0 \
   --phase3_epochs 0 \
@@ -247,14 +255,16 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --attn_heads 4 \
   --lr_g_max 3e-4 \
   --lr_g_min 1e-5 \
-  --warmup_steps_g 1000 \
+  --warmup_steps_g 200 \
   --weight_decay 1e-4 \
   --grad_clip 5.0 \
-  --complex_weight 0.0 \
+  --si_sdr_weight 3 \
+  --mrstft_weight 1 \
+  --complex_weight 1 \
   --no_valid_sv_metric \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --device cuda
 ```
 
@@ -295,7 +305,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --grad_clip 5.0 \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --resume \
   --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_main_q25/checkpoints/epoch_005.pt \
   --device cuda
@@ -328,7 +338,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --grad_clip 5.0 \
   --wavlm_root /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt /home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --device cuda
 ```
 
@@ -372,7 +382,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --phase3_use_wavlm \
   --phase3_no_gan \
   --wavlm_model_id /workspace/camplusplus/my_methods_GAN/pretrained/WavLM/wavlm-base-plus-sv \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --device cpu
 ```
 
@@ -385,14 +395,22 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results.json \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/best_generator.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_second.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.5 \
+  --restore_chunk_batch_size 16 \
   --restore_auto_shrink \
   --restore_min_chunk_seconds 1.0 \
   --restore_chunk_shrink_factor 0.7 \
+  --use_cache \
+  --cache_incremental \
+  --cache_save_every 500 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
+  --dump_speaker_npy_dir my_methods_GAN/exp/sv_codec_restore/run_main/speaker_emb_npy \
+  --speaker_id_sep / \
+  --speaker_id_field 0 \
   --device cuda
 ```
 
@@ -400,11 +418,50 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
 
 - `--restore_chunk_seconds`：restored 路径分块长度（秒），默认 8。
 - `--restore_overlap_seconds`：相邻块重叠长度（秒），默认 0.5。
+- `--restore_chunk_batch_size`：restored 分块批量前向 batch size，默认 8；显存允许可尝试 12/16 提速。
 - `--restore_auto_shrink`：遇到 CUDA OOM 自动缩小 chunk 并重试（默认开启）。
 - `--restore_min_chunk_seconds`：自动缩块最小下限（秒），默认 1.0。
 - `--restore_chunk_shrink_factor`：每次 OOM 后的缩放比例，默认 0.7。
+- `--use_cache`：启用本地 embedding 缓存（默认开启）。
+- `--cache_incremental`：按间隔增量写盘并支持中断续跑（默认开启）。
+- `--cache_save_every`：每 N 条 utt 写一次增量缓存分片，默认 500。
+- `--cache_dir`：缓存目录，默认 `<output_json目录>/emb_cache`。
+- `--overwrite_cache`：强制重算并覆盖已有缓存。
+- `--dump_speaker_npy_dir`：按 clean/coded/restored 分目录导出每个说话人的 embedding `.npy`。
+- `--speaker_id_sep`：从 utt 提取说话人 ID 的分隔符，默认 `/`。
+- `--speaker_id_field`：分隔后取第几个字段作为说话人 ID，默认 `0`。
 
-## 3.1 绘制 train.log 的 avg_train 曲线（按步长抽样）
+## 3.1 单脚本评测 CAMP++（CN-Celeb 全量测试集）
+
+脚本：my_methods_GAN/scripts/eval_campplus_cnceleb.py
+
+```bash
+python my_methods_GAN/scripts/eval_campplus_cnceleb.py \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --cnceleb_root egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/campplus_cnceleb_eval.json \
+  --device cuda
+```
+
+先做映射体检（不提 embedding、不跑全量打分）：
+
+```bash
+python my_methods_GAN/scripts/eval_campplus_cnceleb.py \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --cnceleb_root egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/campplus_cnceleb_eval.json \
+  --dry_run \
+  --device cuda
+```
+
+说明：
+
+- 该脚本单独完成全流程：读取 trials、自动索引 `eval` 音频、提取 CAMP++ embedding、计算 EER/minDCF。
+- 默认使用 `<cnceleb_root>/eval/lists/trials.lst` 和 `<cnceleb_root>/eval`，无需额外生成 scp。
+- 若路径不同，可通过 `--trials_file`、`--eval_audio_root` 显式覆盖。
+- `--dry_run`：仅检查 trials 到音频映射覆盖率（快速排查扩展名/路径问题）。
+
+## 3.2 绘制 train.log 的 avg_train 曲线（按步长抽样）
 
 脚本：my_methods_GAN/scripts/plot_train_avg_curve.py
 
@@ -412,9 +469,9 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_train_avg_curve.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/train.log \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/train.log \
   --sample_every 40 \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/avg_train_curve_s40.png
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/avg_train_curve_s40.png
 ```
 
 每 60 个 step 取一个点：

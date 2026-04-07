@@ -4,6 +4,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from .init_utils import apply_model_init
+
 
 class _ConvDisc1D(nn.Module):
     def __init__(self, channels: tuple[int, ...] = (16, 64, 128, 256)):
@@ -20,6 +22,7 @@ class _ConvDisc1D(nn.Module):
             in_ch = ch
         self.body = nn.Sequential(*layers)
         self.head = nn.Conv1d(in_ch, 1, kernel_size=3, padding=1)
+        #apply_model_init(self, nonlinearity="leaky_relu", negative_slope=0.2)
 
     def forward(self, wav: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         x = wav.unsqueeze(1)

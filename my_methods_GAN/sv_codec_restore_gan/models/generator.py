@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from .init_utils import apply_model_init
+
 
 class GridNetBlock(nn.Module):
     def __init__(self, channels: int, hidden: int = 100, heads: int = 4):
@@ -73,6 +75,7 @@ class SVCodecRestoreGenerator(nn.Module):
         self.out_proj = nn.Conv2d(emb_dim, 2 * cws_subbands, kernel_size=1)
         # Cache STFT window to avoid per-step allocations.
         self.register_buffer("_stft_window", torch.hann_window(self.win_length), persistent=False)
+        #apply_model_init(self, nonlinearity="relu")
 
     def _stft_ri(self, wav: torch.Tensor) -> torch.Tensor:
         spec = torch.stft(
