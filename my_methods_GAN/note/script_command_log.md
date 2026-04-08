@@ -94,6 +94,18 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
 - 2026-04-06: 新增脚本并登记命令（单脚本评测 CAMP++ on CN-Celeb 全量 eval）
   - my_methods_GAN/scripts/eval_campplus_cnceleb.py
+- 2026-04-07: 新增脚本并登记命令（下载并加载 microsoft/wavlm-base-plus-sv 到本地目录）
+  - my_methods_GAN/scripts/load_wavlm_sv_hf.py
+- 2026-04-07: 新增脚本并登记命令（WavLM-SV 小规模 CN-Celeb 评测：EER/minDCF/accuracy）
+  - my_methods_GAN/scripts/eval_wavlm_sv_cnceleb.py
+- 2026-04-07: 修改脚本并更新命令（实验B：CAM++ teacher 可微 log-Mel 微调生成器）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-07: 修改脚本并更新命令（训练日志打印 CAM++ 传回梯度统计）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-07: 修改脚本（训练每步固定打印 rec_total/spk_raw/spk_weighted/generator_grad_norm）
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
 
 ## 0. 环境准备
 
@@ -268,6 +280,80 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --device cuda
 ```
 
+Experiment B（冻结 CAM++ teacher，使用可微 log-Mel 前端微调生成器）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25 \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
+  --phase1_epochs 0 \
+  --phase2_epochs 8 \
+  --phase3_epochs 0 \
+  --batch_size 24 \
+  --num_workers 8 \
+  --segment_seconds 3.0 \
+  --phase2_segment_seconds 3.0 \
+  --train_sample_fraction 1.0 \
+  --valid_sample_fraction 1.0 \
+  --train_stratified_sample \
+  --valid_stratified_sample \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 200 \
+  --si_sdr_weight 2.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.1 \
+  --use_campplus_train_loss \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 0.1 \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --device cuda
+```
+
+新增参数说明：
+
+- `--campplus_frontend {kaldi,diff_mel}`：训练/验证时 CAM++ 特征前端，`diff_mel` 为可微 log-Mel。
+- `--init_generator_ckpt`：仅加载生成器权重做 warm-start（不加载优化器和判别器）。
+- 当 `--init_generator_ckpt` 指向旧实验 checkpoint 且网络宽度参数不一致时，会自动读取 checkpoint 内保存的 `emb_dim/num_blocks/hidden_units/attn_heads` 并覆盖当前配置，避免权重 shape mismatch。
+- `--debug_campplus_grad`：开启后打印由 CAM++ speaker loss 传回 restored waveform 的梯度统计。
+- `--debug_campplus_grad_interval`：梯度统计打印间隔（step），默认 `50`。
+
+实验 B 开启 CAM++ 梯度打印（便于确认梯度回传）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25 \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
+  --phase1_epochs 0 \
+  --phase2_epochs 8 \
+  --phase3_epochs 0 \
+  --batch_size 24 \
+  --num_workers 8 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 200 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 1.0 \
+  --complex_weight 0.1 \
+  --use_campplus_train_loss \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 10 \
+  --debug_campplus_grad \
+  --debug_campplus_grad_interval 10 \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --device cuda
+```
+
 若你确实要用当前命令中的 phase 参数覆盖 checkpoint，请显式追加：
 
 ```bash
@@ -395,7 +481,7 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/best_generator.pt \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25/best_generator_sv.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_second.json \
   --restore_chunk_seconds 8 \
@@ -473,6 +559,49 @@ python my_methods_GAN/scripts/plot_train_avg_curve.py \
   --sample_every 40 \
   --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/avg_train_curve_s40.png
 ```
+
+## 3.3 下载并加载 WavLM-SV（HuggingFace）
+
+脚本：my_methods_GAN/scripts/load_wavlm_sv_hf.py
+
+下载并保存到 `my_methods_GAN/pretrained/WavLM_SV`，同时运行相似度 demo：
+
+```bash
+python my_methods_GAN/scripts/load_wavlm_sv_hf.py \
+  --model_id microsoft/wavlm-base-plus-sv \
+  --output_dir my_methods_GAN/pretrained/WavLM_SV \
+  --device cuda
+```
+
+仅下载保存模型文件，不跑 demo：
+
+```bash
+python my_methods_GAN/scripts/load_wavlm_sv_hf.py \
+  --model_id microsoft/wavlm-base-plus-sv \
+  --output_dir my_methods_GAN/pretrained/WavLM_SV \
+  --skip_demo
+```
+
+## 3.4 WavLM-SV 小规模 CN-Celeb 评测（EER/minDCF/accuracy）
+
+脚本：my_methods_GAN/scripts/eval_wavlm_sv_cnceleb.py
+
+快速小评测（例如 5000 对 trials）：
+
+```bash
+python my_methods_GAN/scripts/eval_wavlm_sv_cnceleb.py \
+  --model_dir my_methods_GAN/pretrained/WavLM_SV \
+  --cnceleb_root egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac \
+  --max_trials 5000 \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/wavlm_sv_cnceleb_small_eval.json \
+  --device cuda
+```
+
+说明：
+
+- 输出包含 `eer_percent`、`min_dcf`、`acc_at_eer_threshold`、`best_accuracy`。
+- 默认 trials 路径：`<cnceleb_root>/eval/lists/trials.lst`。
+- 默认音频索引路径：`<cnceleb_root>/eval`（支持 `wav/flac/mp3/m4a/ogg/opus`）。
 
 每 60 个 step 取一个点：
 

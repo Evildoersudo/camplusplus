@@ -62,8 +62,26 @@ def parse_args():
 
     p.add_argument("--use_campplus_train_loss", action="store_true", help="Use CAMP++ embedding loss during training.")
     p.add_argument("--no_use_campplus_train_loss", action="store_false", dest="use_campplus_train_loss", help="Disable CAMP++ training loss (recommended default).")
+    p.add_argument(
+        "--campplus_frontend",
+        type=str,
+        default="kaldi",
+        choices=["kaldi", "diff_mel"],
+        help="Frontend for CAMP++ train/valid features: kaldi (legacy) or diff_mel (differentiable mel).",
+    )
     p.add_argument("--valid_sv_metric", action="store_true", help="Compute validation speaker cosine metric with CAMP++.")
     p.add_argument("--no_valid_sv_metric", action="store_false", dest="valid_sv_metric", help="Disable validation speaker cosine metric.")
+    p.add_argument(
+        "--debug_campplus_grad",
+        action="store_true",
+        help="Print gradient stats propagated from CAMP++ speaker loss back to restored waveform.",
+    )
+    p.add_argument(
+        "--debug_campplus_grad_interval",
+        type=int,
+        default=50,
+        help="Print CAMP++ gradient stats every N train steps when --debug_campplus_grad is enabled.",
+    )
     p.set_defaults(use_campplus_train_loss=False, valid_sv_metric=True)
 
     p.add_argument("--phase3_use_gan", action="store_true", help="Enable adversarial training in phase3.")
@@ -80,6 +98,12 @@ def parse_args():
 
     p.add_argument("--resume", action="store_true", help="Resume training from checkpoint.")
     p.add_argument("--resume_ckpt", type=str, default="", help="Optional checkpoint path. If empty, use latest under output_dir/checkpoints.")
+    p.add_argument(
+        "--init_generator_ckpt",
+        type=str,
+        default="",
+        help="Optional warm-start checkpoint for generator weights only (e.g., Experiment A best_generator.pt).",
+    )
     p.add_argument(
         "--resume_use_current_phase_config",
         action="store_true",

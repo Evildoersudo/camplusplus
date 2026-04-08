@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import torchaudio
 import torchaudio.compliance.kaldi as Kaldi
 
 from sv_codec_restore_gan.data.dataset import SVCodecPairDataset, collate_pair_batch
@@ -39,6 +40,42 @@ def _fbank_batch(wav: torch.Tensor, sample_rate: int = 16000, n_mels: int = 80) 
             feat = F.pad(feat, (0, 0, 0, max_t - feat.shape[0]))
         out.append(feat)
     return torch.stack(out, dim=0)
+
+
+def _diff_mel_batch(
+    wav: torch.Tensor,
+    sample_rate: int = 16000,
+    n_mels: int = 80,
+    n_fft: int = 400,
+    win_length: int = 400,
+    hop_length: int = 160,
+    f_min: float = 20.0,
+    f_max: float = 7600.0,
+) -> torch.Tensor:
+    # Differentiable log-mel frontend for CAMP++ teacher guidance.
+    mel_tf = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sample_rate,
+        n_fft=n_fft,
+        win_length=win_length,
+        hop_length=hop_length,
+        f_min=f_min,
+        f_max=f_max,
+        n_mels=n_mels,
+        power=2.0,
+        center=True,
+        pad_mode="reflect",
+        norm="slaney",
+        mel_scale="slaney",
+    ).to(wav.device)
+    mel = mel_tf(wav)
+    logmel = torch.log(mel.clamp_min(1e-6)).transpose(1, 2)
+    return logmel - logmel.mean(dim=1, keepdim=True)
+
+
+def _campplus_feats(wav: torch.Tensor, frontend: str) -> torch.Tensor:
+    if frontend == "diff_mel":
+        return _diff_mel_batch(wav)
+    return _fbank_batch(wav)
 
 
 def _cosine_loss(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -126,9 +163,39 @@ def _warmup_cosine_lr(
     return min_lr + (max_lr - min_lr) * cosine
 
 
+def _maybe_override_arch_from_init_ckpt(args: argparse.Namespace, emit) -> None:
+    init_ckpt = getattr(args, "init_generator_ckpt", "")
+    if getattr(args, "resume", False) or not init_ckpt:
+        return
+    init_path = Path(init_ckpt).resolve()
+    if not init_path.exists():
+        return
+    state = torch.load(str(init_path), map_location="cpu")
+    if not isinstance(state, dict):
+        return
+    ckpt_args = state.get("args", {})
+    if not isinstance(ckpt_args, dict):
+        return
+
+    fields = ("emb_dim", "num_blocks", "hidden_units", "attn_heads")
+    updates = []
+    for field in fields:
+        if field in ckpt_args:
+            old_v = getattr(args, field)
+            new_v = int(ckpt_args[field])
+            if int(old_v) != new_v:
+                setattr(args, field, new_v)
+                updates.append((field, old_v, new_v))
+
+    if updates:
+        msg = ", ".join([f"{k}: {ov} -> {nv}" for k, ov, nv in updates])
+        emit(f"[init] override generator arch from init ckpt args: {msg}")
+
+
 def train_main(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     args.d_update_interval = max(1, int(args.d_update_interval))
+    args.debug_campplus_grad_interval = max(1, int(getattr(args, "debug_campplus_grad_interval", 50)))
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     out_dir = ensure_dir(args.output_dir)
     log_file = (out_dir / "train.log").open("a", encoding="utf-8")
@@ -167,6 +234,8 @@ def train_main(args: argparse.Namespace) -> None:
             args.valid_sample_fraction,
         )
     )
+
+    _maybe_override_arch_from_init_ckpt(args, _emit)
 
     generator = SVCodecRestoreGenerator(
         emb_dim=args.emb_dim,
@@ -250,6 +319,14 @@ def train_main(args: argparse.Namespace) -> None:
         start_epoch = resume_epoch + 1
         _emit(f"[resume] loaded checkpoint: {ckpt_path}")
         _emit(f"[resume] start_epoch={start_epoch}, global_step={global_step}, d_global_step={d_global_step}")
+    elif getattr(args, "init_generator_ckpt", ""):
+        init_path = Path(args.init_generator_ckpt).resolve()
+        if not init_path.exists():
+            raise FileNotFoundError(f"init_generator_ckpt not found: {init_path}")
+        init_state = torch.load(str(init_path), map_location="cpu")
+        gen_state = init_state["generator"] if isinstance(init_state, dict) and "generator" in init_state else init_state
+        generator.load_state_dict(gen_state, strict=True)
+        _emit(f"[init] loaded generator warm-start from: {init_path}")
     if start_epoch > total_epochs:
         _emit(
             f"[resume] start_epoch ({start_epoch}) > total_epochs ({total_epochs}). Nothing to train."
@@ -357,6 +434,8 @@ def train_main(args: argparse.Namespace) -> None:
             feat_g = torch.zeros((), device=device)
             wavlm_term = torch.zeros((), device=device)
             spk_term = torch.zeros((), device=device)
+            spk_weighted_term = torch.zeros((), device=device)
+            camp_grad_msg = ""
 
             if phase == "phase3" and opt_d is not None:
                 d_lr = _warmup_cosine_lr(
@@ -398,12 +477,33 @@ def train_main(args: argparse.Namespace) -> None:
                     feat_g = feat_g + loss_feature_matching(real_mbd, fake_mbd_g)
 
             if args.use_campplus_train_loss and phase in {"phase2", "phase3"} and camp is not None:
-                clean_fbank = _fbank_batch(clean)
-                rest_fbank = _fbank_batch(restored)
+                clean_fbank = _campplus_feats(clean, args.campplus_frontend)
+                rest_fbank = _campplus_feats(restored, args.campplus_frontend)
                 with torch.no_grad():
                     emb_clean = camp(clean_fbank)
                 emb_rest = camp(rest_fbank)
                 spk_term = _cosine_loss(emb_rest, emb_clean)
+
+                if args.debug_campplus_grad and (step == 1 or step % args.debug_campplus_grad_interval == 0):
+                    if not spk_term.requires_grad:
+                        camp_grad_msg = "camp_grad=disconnected"
+                    else:
+                        grad_from_camp = torch.autograd.grad(
+                            outputs=args.spk_loss_weight * spk_term,
+                            inputs=restored,
+                            retain_graph=True,
+                            allow_unused=True,
+                        )[0]
+                        if grad_from_camp is None:
+                            camp_grad_msg = "camp_grad=none"
+                        else:
+                            camp_grad_msg = (
+                                "camp_grad_norm={:.3e} camp_grad_abs_mean={:.3e} camp_grad_abs_max={:.3e}".format(
+                                    float(grad_from_camp.norm().detach().cpu()),
+                                    float(grad_from_camp.abs().mean().detach().cpu()),
+                                    float(grad_from_camp.abs().max().detach().cpu()),
+                                )
+                            )
 
             if phase == "phase3" and args.phase3_use_wavlm and wavlm is not None:
                 with torch.no_grad():
@@ -416,7 +516,8 @@ def train_main(args: argparse.Namespace) -> None:
 
             g_loss = rec_term
             if args.use_campplus_train_loss and phase in {"phase2", "phase3"} and camp is not None:
-                g_loss = g_loss + args.spk_loss_weight * spk_term
+                spk_weighted_term = args.spk_loss_weight * spk_term
+                g_loss = g_loss + spk_weighted_term
             if phase == "phase3":
                 if opt_d is not None:
                     g_loss = g_loss + args.adv_loss_weight * adv_g + args.fm_loss_weight * feat_g
@@ -425,7 +526,7 @@ def train_main(args: argparse.Namespace) -> None:
 
             opt_g.zero_grad(set_to_none=True)
             g_loss.backward()
-            torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=args.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=args.grad_clip)
             opt_g.step()
 
             train_loss += float(g_loss.detach().cpu())
@@ -434,16 +535,26 @@ def train_main(args: argparse.Namespace) -> None:
 
             avg_train = train_loss / step
             elapsed = time.time() - t0
+            rec_total = float(rec_term.detach().cpu())
+            spk_raw = float(spk_term.detach().cpu())
+            spk_weighted = float(spk_weighted_term.detach().cpu())
+            generator_grad_norm = float(grad_norm.detach().cpu()) if torch.is_tensor(grad_norm) else float(grad_norm)
             step_message = (
                 f"[epoch {epoch:03d}][{phase}] step {step}/{len(train_loader)} "
                 f"avg_train={avg_train:.4f} "
+                f"rec_total={rec_total:.4f} "
+                f"spk_raw={spk_raw:.4f} "
+                f"spk_weighted={spk_weighted:.4f} "
+                f"generator_grad_norm={generator_grad_norm:.3e} "
                 f"si_sdr={sum_sisdr/step:.4f} "
                 f"mrstft={sum_mrstft/step:.4f} "
                 f"complex={sum_complex/step:.4f} "
                 f"lr_g={opt_g.param_groups[0]['lr']:.2e} "
                 f"elapsed={elapsed:.1f}s"
             )
-            _emit(step_message, also_console=(step % log_interval == 0 or step == len(train_loader)))
+            if camp_grad_msg:
+                step_message = f"{step_message} {camp_grad_msg}"
+            _emit(step_message, also_console=True)
 
         train_loss /= max(1, len(train_loader))
 
@@ -469,8 +580,8 @@ def train_main(args: argparse.Namespace) -> None:
                 valid_rec_loss += float((args.rec_loss_weight * rec_dict["total"]).detach().cpu())
 
                 if args.valid_sv_metric and camp is not None:
-                    clean_fbank = _fbank_batch(clean)
-                    rest_fbank = _fbank_batch(restored)
+                    clean_fbank = _campplus_feats(clean, args.campplus_frontend)
+                    rest_fbank = _campplus_feats(restored, args.campplus_frontend)
                     emb_clean = camp(clean_fbank)
                     emb_rest = camp(rest_fbank)
                     cos = F.cosine_similarity(emb_rest, emb_clean, dim=-1).mean()
