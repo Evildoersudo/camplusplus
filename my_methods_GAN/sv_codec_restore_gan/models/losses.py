@@ -47,7 +47,13 @@ def loss_mrstft(
         p_mag = p.abs().clamp_min(eps)
         t_mag = t.abs().clamp_min(eps)
 
-        spectral_convergence = torch.linalg.norm(t_mag - p_mag) / torch.linalg.norm(t_mag)
+        bsz = p_mag.shape[0]
+        diff = (t_mag - p_mag).reshape(bsz, -1)
+        ref = t_mag.reshape(bsz, -1)
+        spectral_convergence = (
+            torch.linalg.vector_norm(diff, dim=1)
+            / torch.linalg.vector_norm(ref, dim=1).clamp_min(eps)
+        ).mean()
         log_mag = F.l1_loss(_safe_log(p_mag, eps), _safe_log(t_mag, eps))
         losses.append(spectral_convergence + log_mag)
     return torch.stack(losses).mean()

@@ -14,7 +14,13 @@ from sv_codec_restore_gan.data.manifest import build_pair_manifest
 def parse_args():
     p = argparse.ArgumentParser(description="Build clean/coded pair manifest for SV-CodecRestoreGAN.")
     p.add_argument("--clean_root", type=str, required=True)
-    p.add_argument("--coded_root", type=str, required=True)
+    p.add_argument(
+        "--coded_root",
+        type=str,
+        required=True,
+        nargs="+",
+        help="One or more coded roots. Multiple roots are merged into multi-codec entries.",
+    )
     p.add_argument("--output_csv", type=str, required=True)
     return p.parse_args()
 

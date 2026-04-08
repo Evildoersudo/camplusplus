@@ -106,6 +106,23 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/sv_codec_restore_gan/train/engine.py
 - 2026-04-07: 修改脚本（训练每步固定打印 rec_total/spk_raw/spk_weighted/generator_grad_norm）
   - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-08: 修改脚本并更新命令（GAN改进：AM-Softmax说话人损失 + multi-codec训练）
+  - my_methods_GAN/sv_codec_restore_gan/models/speaker_losses.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/sv_codec_restore_gan/data/dataset.py
+  - my_methods_GAN/sv_codec_restore_gan/data/manifest.py
+  - my_methods_GAN/scripts/build_sv_codec_manifest.py
+- 2026-04-08: 修复脚本（plot_train_avg_curve 正则解析错误）
+  - my_methods_GAN/scripts/plot_train_avg_curve.py
+- 2026-04-08: 修改脚本并更新命令（plot_train_avg_curve 支持多指标子图）
+  - my_methods_GAN/scripts/plot_train_avg_curve.py
+- 2026-04-08: 修改脚本并更新命令（GAN改善第二版：对齐裁剪 + CAMP++ deep feature loss + MRSTFT稳态化）
+  - my_methods_GAN/sv_codec_restore_gan/data/dataset.py
+  - my_methods_GAN/sv_codec_restore_gan/models/campplus_wrapper.py
+  - my_methods_GAN/sv_codec_restore_gan/models/losses.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
 
 ## 0. 环境准备
 
@@ -124,6 +141,17 @@ python my_methods_GAN/scripts/build_sv_codec_manifest.py \
   --clean_root /path/to/clean_root \
   --coded_root /path/to/coded_root \
   --output_csv my_methods_GAN/exp/sv_codec_restore/manifest_pair.csv
+```
+
+multi-codec manifest（每条样本写入多个 codec 路径，训练时随机采样一个）：
+
+```bash
+python my_methods_GAN/scripts/build_sv_codec_manifest.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_opus_16k \
+              my_methods_GAN/data/cnceleb_truepair/coded_train_aac_32k \
+              my_methods_GAN/data/cnceleb_truepair/coded_train_amrwb_23k \
+  --output_csv my_methods_GAN/exp/sv_codec_restore/pair_manifest_multicodec.csv
 ```
 
 ## 2. 三阶段训练 SV-CodecRestoreGAN
@@ -250,13 +278,13 @@ Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
   --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third \
   --phase1_epochs 25 \
   --phase2_epochs 0 \
   --phase3_epochs 0 \
-  --batch_size 28 \
+  --batch_size 24 \
   --num_workers 8 \
-  --segment_seconds 3.0 \
+  --segment_seconds 4.0 \
   --train_sample_fraction 1.0 \
   --valid_sample_fraction 1.0 \
   --train_stratified_sample \
@@ -268,12 +296,15 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --lr_g_max 3e-4 \
   --lr_g_min 1e-5 \
   --warmup_steps_g 200 \
+  --si_sdr_weight 2 \
+  --mrstft_weight 1 \
+  --complex_weight 1 \
   --weight_decay 1e-4 \
   --grad_clip 5.0 \
   --si_sdr_weight 3 \
   --mrstft_weight 1 \
   --complex_weight 1 \
-  --no_valid_sv_metric \
+  --valid_sv_metric \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
@@ -286,7 +317,7 @@ Experiment B（冻结 CAM++ teacher，使用可微 log-Mel 前端微调生成器
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
   --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25 \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25_second \
   --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
   --phase1_epochs 0 \
   --phase2_epochs 8 \
@@ -307,7 +338,45 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --complex_weight 0.1 \
   --use_campplus_train_loss \
   --campplus_frontend diff_mel \
-  --spk_loss_weight 0.1 \
+  --spk_loss_weight 10 \
+  --use_spk_amsoftmax \
+  --spk_cls_loss_weight 1 \
+  --spk_am_margin 0.2 \
+  --spk_am_scale 30 \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --device cuda
+```
+
+Experiment B2（按 GAN 改善第二版：关闭 AM-Softmax，启用 deep feature loss，4s 对齐裁剪）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25 \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
+  --phase1_epochs 0 \
+  --phase2_epochs 6 \
+  --phase3_epochs 0 \
+  --batch_size 24 \
+  --num_workers 8 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 100 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.0 \
+  --use_campplus_train_loss \
+  --use_campplus_feat_loss \
+  --campplus_feat_layers block2,out_nonlinear \
+  --campplus_feat_loss_weight 0.5 \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 5 \
+  --no_use_spk_amsoftmax \
   --phase3_no_gan \
   --phase3_no_wavlm \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
@@ -321,6 +390,16 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
 - 当 `--init_generator_ckpt` 指向旧实验 checkpoint 且网络宽度参数不一致时，会自动读取 checkpoint 内保存的 `emb_dim/num_blocks/hidden_units/attn_heads` 并覆盖当前配置，避免权重 shape mismatch。
 - `--debug_campplus_grad`：开启后打印由 CAM++ speaker loss 传回 restored waveform 的梯度统计。
 - `--debug_campplus_grad_interval`：梯度统计打印间隔（step），默认 `50`。
+- `--use_spk_amsoftmax`：开启 AM-Softmax 说话人分类损失（基于 CAMP++ embedding）。
+- `--spk_cls_loss_weight`：AM-Softmax loss 权重。
+- `--spk_am_margin`：AM-Softmax margin。
+- `--spk_am_scale`：AM-Softmax scale。
+- `--adv_loss_weight` 默认值已调整为 `0.5`（与 GAN 改进建议一致）。
+- `--use_campplus_feat_loss`：开启 CAMP++ 中间层 deep feature L1 loss。
+- `--campplus_feat_layers`：指定 deep feature loss 使用的 CAMP++ 层名（逗号分隔）。
+- `--campplus_feat_loss_weight`：deep feature loss 权重，建议从 `0.5` 起步。
+- 数据裁剪已改为 clean/coded 同起点对齐裁剪，避免 pair 错位。
+- MRSTFT 的 spectral convergence 已改为 per-sample 统计后再 batch 平均，降低 batch 能量主导带来的波动。
 
 实验 B 开启 CAM++ 梯度打印（便于确认梯度回传）：
 
@@ -555,9 +634,9 @@ python my_methods_GAN/scripts/eval_campplus_cnceleb.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_train_avg_curve.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/train.log \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25_second/train.log \
   --sample_every 40 \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_second/avg_train_curve_s40.png
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25_second/avg_train_curve_s40.png
 ```
 
 ## 3.3 下载并加载 WavLM-SV（HuggingFace）

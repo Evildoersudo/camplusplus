@@ -34,17 +34,43 @@ def _infer_emb_dim(state_dict: dict) -> int:
     return int(weight.shape[0])
 
 
+def infer_campplus_embedding_dim(model_path: str | Path) -> int:
+    state = torch.load(str(Path(model_path).resolve()), map_location="cpu")
+    state_dict = _unwrap(state)
+    return _infer_emb_dim(state_dict)
+
+
 class FrozenCampPlus(torch.nn.Module):
     def __init__(self, model_path: str | Path):
         super().__init__()
         state = torch.load(str(Path(model_path).resolve()), map_location="cpu")
         state_dict = _unwrap(state)
-        self.model = CAMPPlus(feat_dim=80, embedding_size=_infer_emb_dim(state_dict))
+        self.embedding_dim = _infer_emb_dim(state_dict)
+        self.model = CAMPPlus(feat_dim=80, embedding_size=self.embedding_dim)
         self.model.load_state_dict(state_dict, strict=True)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False
 
-    def forward(self, feat_bt80: torch.Tensor) -> torch.Tensor:
-        emb = self.model(feat_bt80)
-        return F.normalize(emb, dim=-1)
+    def forward(
+        self,
+        feat_bt80: torch.Tensor,
+        return_feats: bool = False,
+        feat_layers: tuple[str, ...] = (),
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if not return_feats:
+            emb = self.model(feat_bt80)
+            return F.normalize(emb, dim=-1)
+
+        x = feat_bt80.permute(0, 2, 1)  # (B,T,F) => (B,F,T)
+        x = self.model.head(x)
+
+        feats: dict[str, torch.Tensor] = {}
+        selected = set(feat_layers)
+        for name, layer in self.model.xvector._modules.items():
+            x = layer(x)
+            if name in selected:
+                feats[name] = x
+
+        emb = F.normalize(x, dim=-1)
+        return emb, feats

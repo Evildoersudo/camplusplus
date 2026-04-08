@@ -12,7 +12,7 @@ import torchaudio
 import torchaudio.compliance.kaldi as Kaldi
 
 from sv_codec_restore_gan.data.dataset import SVCodecPairDataset, collate_pair_batch
-from sv_codec_restore_gan.models.campplus_wrapper import FrozenCampPlus
+from sv_codec_restore_gan.models.campplus_wrapper import FrozenCampPlus, infer_campplus_embedding_dim
 from sv_codec_restore_gan.models.discriminators import MultiBandDiscriminator, MultiResolutionDiscriminator
 from sv_codec_restore_gan.models.generator import SVCodecRestoreGenerator
 from sv_codec_restore_gan.models.losses import (
@@ -21,6 +21,7 @@ from sv_codec_restore_gan.models.losses import (
     loss_feature_matching,
     loss_rec,
 )
+from sv_codec_restore_gan.models.speaker_losses import AMSoftmaxClassifier
 from sv_codec_restore_gan.models.wavlm_wrapper import WavLMFeatureExtractor
 from sv_codec_restore_gan.utils.io import ensure_dir, save_json
 from sv_codec_restore_gan.utils.seed import set_seed
@@ -85,6 +86,25 @@ def _cosine_loss(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 def _frame_l1_loss(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     t = min(a.shape[1], b.shape[1])
     return F.l1_loss(a[:, :t], b[:, :t])
+
+
+def _campplus_feature_l1_loss(feats_a: dict[str, torch.Tensor], feats_b: dict[str, torch.Tensor], device: torch.device) -> torch.Tensor:
+    losses = []
+    common = sorted(set(feats_a.keys()) & set(feats_b.keys()))
+    for k in common:
+        a = feats_a[k]
+        b = feats_b[k]
+        if a.shape != b.shape:
+            if a.dim() == b.dim() and a.dim() >= 3:
+                t = min(a.shape[-1], b.shape[-1])
+                a = a[..., :t]
+                b = b[..., :t]
+            else:
+                continue
+        losses.append(F.l1_loss(a, b))
+    if not losses:
+        return torch.zeros((), device=device)
+    return torch.stack(losses).mean()
 
 
 def _build_loader(
@@ -192,10 +212,16 @@ def _maybe_override_arch_from_init_ckpt(args: argparse.Namespace, emit) -> None:
         emit(f"[init] override generator arch from init ckpt args: {msg}")
 
 
+def _build_speaker_index(rows) -> dict[str, int]:
+    spk_set = sorted({row.spk_id for row in rows})
+    return {spk: idx for idx, spk in enumerate(spk_set)}
+
+
 def train_main(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     args.d_update_interval = max(1, int(args.d_update_interval))
     args.debug_campplus_grad_interval = max(1, int(getattr(args, "debug_campplus_grad_interval", 50)))
+    args.campplus_feat_layers = tuple(x.strip() for x in str(getattr(args, "campplus_feat_layers", "")).split(",") if x.strip())
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     out_dir = ensure_dir(args.output_dir)
     log_file = (out_dir / "train.log").open("a", encoding="utf-8")
@@ -237,6 +263,22 @@ def train_main(args: argparse.Namespace) -> None:
 
     _maybe_override_arch_from_init_ckpt(args, _emit)
 
+    spk_to_idx: dict[str, int] = {}
+    spk_classifier = None
+    if args.use_spk_amsoftmax:
+        train_rows = getattr(train_loader.dataset, "rows", [])
+        spk_to_idx = _build_speaker_index(train_rows)
+        if len(spk_to_idx) <= 1:
+            raise RuntimeError("AM-Softmax requires at least 2 speakers in train manifest.")
+        spk_emb_dim = infer_campplus_embedding_dim(args.campplus_ckpt)
+        spk_classifier = AMSoftmaxClassifier(
+            in_dim=spk_emb_dim,
+            num_classes=len(spk_to_idx),
+            margin=args.spk_am_margin,
+            scale=args.spk_am_scale,
+        ).to(device)
+        _emit(f"[info] AM-Softmax enabled: speakers={len(spk_to_idx)} emb_dim={spk_emb_dim}")
+
     generator = SVCodecRestoreGenerator(
         emb_dim=args.emb_dim,
         num_blocks=args.num_blocks,
@@ -246,7 +288,10 @@ def train_main(args: argparse.Namespace) -> None:
     mrd = MultiResolutionDiscriminator().to(device) if args.phase3_use_gan else None
     mbd = MultiBandDiscriminator().to(device) if args.phase3_use_gan and args.use_mbd else None
 
-    opt_g = torch.optim.AdamW(generator.parameters(), lr=args.lr_g_max, weight_decay=args.weight_decay)
+    g_params = list(generator.parameters())
+    if spk_classifier is not None:
+        g_params.extend(spk_classifier.parameters())
+    opt_g = torch.optim.AdamW(g_params, lr=args.lr_g_max, weight_decay=args.weight_decay)
     disc_params = []
     if mrd is not None:
         disc_params.extend(mrd.parameters())
@@ -306,8 +351,13 @@ def train_main(args: argparse.Namespace) -> None:
             mrd.load_state_dict(state["mrd"])
         if mbd is not None and state.get("mbd") is not None:
             mbd.load_state_dict(state["mbd"])
+        if spk_classifier is not None and state.get("spk_classifier") is not None:
+            spk_classifier.load_state_dict(state["spk_classifier"])
         if "opt_g" in state:
-            opt_g.load_state_dict(state["opt_g"])
+            try:
+                opt_g.load_state_dict(state["opt_g"])
+            except ValueError as exc:
+                _emit(f"[resume] skip opt_g state due param-group mismatch: {exc}")
         if opt_d is not None and state.get("opt_d") is not None:
             opt_d.load_state_dict(state["opt_d"])
 
@@ -374,7 +424,7 @@ def train_main(args: argparse.Namespace) -> None:
             phase_total_d_steps = max(1, (phase_epochs * len(train_loader) + args.d_update_interval - 1) // args.d_update_interval)
             prev_phase = phase
 
-        need_camp = args.use_campplus_train_loss or args.valid_sv_metric
+        need_camp = args.use_campplus_train_loss or args.valid_sv_metric or (spk_classifier is not None) or args.use_campplus_feat_loss
         if need_camp and camp is None:
             _emit("[info] Initializing CAM++ for validation/optional loss...")
             camp = FrozenCampPlus(args.campplus_ckpt).to(device)
@@ -435,6 +485,10 @@ def train_main(args: argparse.Namespace) -> None:
             wavlm_term = torch.zeros((), device=device)
             spk_term = torch.zeros((), device=device)
             spk_weighted_term = torch.zeros((), device=device)
+            spk_cls_term = torch.zeros((), device=device)
+            spk_cls_weighted_term = torch.zeros((), device=device)
+            spk_feat_term = torch.zeros((), device=device)
+            spk_feat_weighted_term = torch.zeros((), device=device)
             camp_grad_msg = ""
 
             if phase == "phase3" and opt_d is not None:
@@ -476,15 +530,35 @@ def train_main(args: argparse.Namespace) -> None:
                     adv_g = adv_g + loss_adv_generator(fake_mbd_g)
                     feat_g = feat_g + loss_feature_matching(real_mbd, fake_mbd_g)
 
-            if args.use_campplus_train_loss and phase in {"phase2", "phase3"} and camp is not None:
+            if phase in {"phase2", "phase3"} and camp is not None and (
+                args.use_campplus_train_loss or args.use_campplus_feat_loss or spk_classifier is not None
+            ):
                 clean_fbank = _campplus_feats(clean, args.campplus_frontend)
                 rest_fbank = _campplus_feats(restored, args.campplus_frontend)
-                with torch.no_grad():
-                    emb_clean = camp(clean_fbank)
-                emb_rest = camp(rest_fbank)
-                spk_term = _cosine_loss(emb_rest, emb_clean)
+                need_feats = bool(args.use_campplus_feat_loss and args.campplus_feat_layers)
 
-                if args.debug_campplus_grad and (step == 1 or step % args.debug_campplus_grad_interval == 0):
+                if need_feats:
+                    emb_rest, feat_rest = camp(rest_fbank, return_feats=True, feat_layers=args.campplus_feat_layers)
+                else:
+                    emb_rest = camp(rest_fbank)
+                    feat_rest = {}
+
+                emb_clean = None
+                feat_clean = {}
+                if args.use_campplus_train_loss or args.use_campplus_feat_loss:
+                    with torch.no_grad():
+                        if need_feats:
+                            emb_clean, feat_clean = camp(clean_fbank, return_feats=True, feat_layers=args.campplus_feat_layers)
+                        else:
+                            emb_clean = camp(clean_fbank)
+
+                if args.use_campplus_train_loss and emb_clean is not None:
+                    spk_term = _cosine_loss(emb_rest, emb_clean)
+
+                if args.use_campplus_feat_loss and feat_rest and feat_clean:
+                    spk_feat_term = _campplus_feature_l1_loss(feat_rest, feat_clean, device=device)
+
+                if args.use_campplus_train_loss and args.debug_campplus_grad and (step == 1 or step % args.debug_campplus_grad_interval == 0):
                     if not spk_term.requires_grad:
                         camp_grad_msg = "camp_grad=disconnected"
                     else:
@@ -505,6 +579,10 @@ def train_main(args: argparse.Namespace) -> None:
                                 )
                             )
 
+                if spk_classifier is not None:
+                    labels = torch.tensor([spk_to_idx[s] for s in batch["spk_id"]], dtype=torch.long, device=device)
+                    spk_cls_term = spk_classifier(emb_rest, labels)
+
             if phase == "phase3" and args.phase3_use_wavlm and wavlm is not None:
                 with torch.no_grad():
                     wavlm_clean = wavlm(clean)
@@ -518,6 +596,12 @@ def train_main(args: argparse.Namespace) -> None:
             if args.use_campplus_train_loss and phase in {"phase2", "phase3"} and camp is not None:
                 spk_weighted_term = args.spk_loss_weight * spk_term
                 g_loss = g_loss + spk_weighted_term
+            if args.use_campplus_feat_loss and phase in {"phase2", "phase3"} and camp is not None:
+                spk_feat_weighted_term = args.campplus_feat_loss_weight * spk_feat_term
+                g_loss = g_loss + spk_feat_weighted_term
+            if spk_classifier is not None and phase in {"phase2", "phase3"}:
+                spk_cls_weighted_term = args.spk_cls_loss_weight * spk_cls_term
+                g_loss = g_loss + spk_cls_weighted_term
             if phase == "phase3":
                 if opt_d is not None:
                     g_loss = g_loss + args.adv_loss_weight * adv_g + args.fm_loss_weight * feat_g
@@ -538,6 +622,10 @@ def train_main(args: argparse.Namespace) -> None:
             rec_total = float(rec_term.detach().cpu())
             spk_raw = float(spk_term.detach().cpu())
             spk_weighted = float(spk_weighted_term.detach().cpu())
+            spk_cls_raw = float(spk_cls_term.detach().cpu())
+            spk_cls_weighted = float(spk_cls_weighted_term.detach().cpu())
+            spk_feat_raw = float(spk_feat_term.detach().cpu())
+            spk_feat_weighted = float(spk_feat_weighted_term.detach().cpu())
             generator_grad_norm = float(grad_norm.detach().cpu()) if torch.is_tensor(grad_norm) else float(grad_norm)
             step_message = (
                 f"[epoch {epoch:03d}][{phase}] step {step}/{len(train_loader)} "
@@ -545,6 +633,10 @@ def train_main(args: argparse.Namespace) -> None:
                 f"rec_total={rec_total:.4f} "
                 f"spk_raw={spk_raw:.4f} "
                 f"spk_weighted={spk_weighted:.4f} "
+                f"spk_feat_raw={spk_feat_raw:.4f} "
+                f"spk_feat_weighted={spk_feat_weighted:.4f} "
+                f"spk_cls_raw={spk_cls_raw:.4f} "
+                f"spk_cls_weighted={spk_cls_weighted:.4f} "
                 f"generator_grad_norm={generator_grad_norm:.3e} "
                 f"si_sdr={sum_sisdr/step:.4f} "
                 f"mrstft={sum_mrstft/step:.4f} "
@@ -603,6 +695,8 @@ def train_main(args: argparse.Namespace) -> None:
             "generator": generator.state_dict(),
             "mrd": mrd.state_dict() if mrd is not None else None,
             "mbd": mbd.state_dict() if mbd is not None else None,
+            "spk_classifier": spk_classifier.state_dict() if spk_classifier is not None else None,
+            "spk_to_idx": spk_to_idx,
             "opt_g": opt_g.state_dict(),
             "opt_d": opt_d.state_dict() if opt_d is not None else None,
             "args": vars(args),

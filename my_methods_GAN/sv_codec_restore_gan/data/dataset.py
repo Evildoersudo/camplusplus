@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
-from sv_codec_restore_gan.utils.audio import crop_or_pad, load_audio_mono
+from sv_codec_restore_gan.utils.audio import load_audio_mono
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,14 @@ class PairRow:
     utt_id: str
     spk_id: str
     clean_wav: str
-    codec_wav: str
+    codec_wavs: tuple[str, ...]
+
+
+def _parse_codec_wavs(codec_cell: str) -> tuple[str, ...]:
+    parts = [p.strip() for p in str(codec_cell).replace(";", "|").split("|") if p.strip()]
+    if not parts:
+        raise ValueError("Empty codec_wav field in manifest row.")
+    return tuple(parts)
 
 
 def _read_manifest(path: str | Path) -> list[PairRow]:
@@ -31,7 +39,7 @@ def _read_manifest(path: str | Path) -> list[PairRow]:
                     utt_id=row["utt_id"],
                     spk_id=row["spk_id"],
                     clean_wav=row["clean_wav"],
-                    codec_wav=row["codec_wav"],
+                    codec_wavs=_parse_codec_wavs(row["codec_wav"]),
                 )
             )
     return rows
@@ -84,6 +92,27 @@ class SVCodecPairDataset(Dataset):
         self.sample_rate = int(sample_rate)
         self.segment_len = int(sample_rate * segment_seconds)
         self.random_crop = bool(random_crop)
+        self._rng = random.Random(sample_seed)
+
+    def _aligned_crop_or_pad(self, clean: torch.Tensor, coded: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.segment_len <= 0:
+            l = min(clean.numel(), coded.numel())
+            return clean[:l].contiguous(), coded[:l].contiguous()
+
+        l = min(clean.numel(), coded.numel())
+        clean = clean[:l]
+        coded = coded[:l]
+
+        if l >= self.segment_len:
+            if self.random_crop:
+                start = self._rng.randint(0, l - self.segment_len)
+            else:
+                start = 0
+            end = start + self.segment_len
+            return clean[start:end].contiguous(), coded[start:end].contiguous()
+
+        pad = self.segment_len - l
+        return F.pad(clean, (0, pad)).contiguous(), F.pad(coded, (0, pad)).contiguous()
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -91,21 +120,22 @@ class SVCodecPairDataset(Dataset):
     def __getitem__(self, idx: int):
         row = self.rows[idx]
         clean = load_audio_mono(row.clean_wav, sample_rate=self.sample_rate)
-        coded = load_audio_mono(row.codec_wav, sample_rate=self.sample_rate)
+        if len(row.codec_wavs) == 1:
+            codec_wav = row.codec_wavs[0]
+        elif self.random_crop:
+            codec_wav = self._rng.choice(row.codec_wavs)
+        else:
+            codec_wav = row.codec_wavs[idx % len(row.codec_wavs)]
+        coded = load_audio_mono(codec_wav, sample_rate=self.sample_rate)
 
-        if self.segment_len > 0:
-            if self.random_crop:
-                clean = crop_or_pad(clean, self.segment_len)
-                coded = crop_or_pad(coded, self.segment_len)
-            else:
-                clean = clean[: self.segment_len] if clean.numel() >= self.segment_len else crop_or_pad(clean, self.segment_len)
-                coded = coded[: self.segment_len] if coded.numel() >= self.segment_len else crop_or_pad(coded, self.segment_len)
+        clean, coded = self._aligned_crop_or_pad(clean, coded)
 
         return {
             "utt_id": row.utt_id,
             "spk_id": row.spk_id,
             "clean": clean,
             "coded": coded,
+            "codec_wav": codec_wav,
             "length": min(clean.numel(), coded.numel()),
         }
 
@@ -120,4 +150,5 @@ def collate_pair_batch(batch: list[dict]) -> dict:
         "lengths": lengths,
         "utt_id": [item["utt_id"] for item in batch],
         "spk_id": [item["spk_id"] for item in batch],
+        "codec_wav": [item["codec_wav"] for item in batch],
     }

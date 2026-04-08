@@ -54,9 +54,11 @@ def parse_args():
     p.add_argument("--mrstft_weight", type=float, default=1.0)
     p.add_argument("--complex_weight", type=float, default=0.5)
     p.add_argument("--rec_loss_weight", type=float, default=1.0)
-    p.add_argument("--spk_loss_weight", type=float, default=0.1)
+    p.add_argument("--spk_loss_weight", type=float, default=5.0)
+    p.add_argument("--campplus_feat_loss_weight", type=float, default=0.5)
+    p.add_argument("--spk_cls_loss_weight", type=float, default=1.0)
     p.add_argument("--wavlm_loss_weight", type=float, default=0.1)
-    p.add_argument("--adv_loss_weight", type=float, default=0.1)
+    p.add_argument("--adv_loss_weight", type=float, default=0.5)
     p.add_argument("--fm_loss_weight", type=float, default=0.1)
     p.add_argument("--d_update_interval", type=int, default=2, help="Update discriminator every N generator steps.")
 
@@ -69,6 +71,28 @@ def parse_args():
         choices=["kaldi", "diff_mel"],
         help="Frontend for CAMP++ train/valid features: kaldi (legacy) or diff_mel (differentiable mel).",
     )
+    p.add_argument("--use_campplus_feat_loss", action="store_true", help="Enable CAMP++ deep feature L1 loss.")
+    p.add_argument(
+        "--no_use_campplus_feat_loss",
+        action="store_false",
+        dest="use_campplus_feat_loss",
+        help="Disable CAMP++ deep feature L1 loss.",
+    )
+    p.add_argument(
+        "--campplus_feat_layers",
+        type=str,
+        default="block2,out_nonlinear",
+        help="Comma-separated CAMP++ layer names used for deep feature loss.",
+    )
+    p.add_argument("--use_spk_amsoftmax", action="store_true", help="Enable AM-Softmax speaker classification loss on CAMP++ embeddings.")
+    p.add_argument(
+        "--no_use_spk_amsoftmax",
+        action="store_false",
+        dest="use_spk_amsoftmax",
+        help="Disable AM-Softmax speaker classification loss.",
+    )
+    p.add_argument("--spk_am_margin", type=float, default=0.2, help="Additive angular margin for AM-Softmax.")
+    p.add_argument("--spk_am_scale", type=float, default=30.0, help="Logit scale for AM-Softmax.")
     p.add_argument("--valid_sv_metric", action="store_true", help="Compute validation speaker cosine metric with CAMP++.")
     p.add_argument("--no_valid_sv_metric", action="store_false", dest="valid_sv_metric", help="Disable validation speaker cosine metric.")
     p.add_argument(
@@ -82,7 +106,12 @@ def parse_args():
         default=50,
         help="Print CAMP++ gradient stats every N train steps when --debug_campplus_grad is enabled.",
     )
-    p.set_defaults(use_campplus_train_loss=False, valid_sv_metric=True)
+    p.set_defaults(
+        use_campplus_train_loss=False,
+        valid_sv_metric=True,
+        use_spk_amsoftmax=False,
+        use_campplus_feat_loss=True,
+    )
 
     p.add_argument("--phase3_use_gan", action="store_true", help="Enable adversarial training in phase3.")
     p.add_argument("--phase3_no_gan", action="store_false", dest="phase3_use_gan", help="Disable adversarial training in phase3.")
