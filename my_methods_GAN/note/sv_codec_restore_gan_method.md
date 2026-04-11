@@ -1,155 +1,126 @@
-# SV-CodecRestoreGAN 实现说明
+# SV-CodecRestoreGAN 方法说明（与当前实现一致）
 
-本文档将 raw_method.md 的主线落地为可执行代码，目标是：
+本文档按当前代码与实验记录（A / B / B2）整理，避免旧版描述与实际实现不一致。
 
-- 以 16 kHz coded 语音为输入
-- 内部升采样到 48 kHz 做时频恢复
-- 使用 CWS-TF-GridNet 风格生成器
-- 在 phase2/phase3 引入 MRD+MBD GAN 约束
-- 在 phase3 引入 WavLM 与 CAM++ 一致性损失
-- 最终以 EER/minDCF 作为核心模型选择指标
+## 1. 目标与主线
 
-## 1. 目录结构
+- 任务：输入 16k coded 语音，输出 16k restored 语音。
+- 训练主线：以重建损失为基础，在 phase2/phase3 按开关加入 speaker / GAN / WavLM 约束。
+- 评测主线：以 SV 指标（EER/minDCF）验证 restored 是否优于 coded，同时监控重建指标。
 
-- 代码根目录：my_methods_GAN
-- 模型与训练主包：my_methods_GAN/sv_codec_restore_gan
-- 命令入口脚本：my_methods_GAN/scripts
-- 文档目录：my_methods_GAN/note
+## 2. 当前代码结构
 
-核心子目录：
+- 训练入口：my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 训练引擎：my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 生成器：my_methods_GAN/sv_codec_restore_gan/models/generator.py
+- 判别器：my_methods_GAN/sv_codec_restore_gan/models/discriminators.py
+- 重建损失：my_methods_GAN/sv_codec_restore_gan/models/losses.py
+- CAMP++封装：my_methods_GAN/sv_codec_restore_gan/models/campplus_wrapper.py
+- 评测入口：my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
 
-- data：pair manifest 与数据集
-- models：生成器、判别器、损失、WavLM/CAM++ 封装
-- train：三阶段训练引擎
-- utils：音频、指标、随机种子、IO
+## 3. 训练阶段与损失（按当前实现）
 
-## 2. 网络与损失设计
+### 3.1 三阶段定义
 
-### 2.1 生成器
+- Phase1：仅生成器 + 重建损失。
+- Phase2：默认仍以重建为主，可选加入 CAMP++ embedding loss、CAMP++ deep feature loss、AM-Softmax 分类损失。
+- Phase3：在 Phase2 基础上可选加入 GAN（MRD/MBD）与 WavLM distillation。
 
-- 文件：sv_codec_restore_gan/models/generator.py
-- 路径：16k -> 48k -> STFT -> CWS split(3) -> GridNetBlock x 5 -> merge -> iSTFT -> skip add -> 16k
-- 默认参数：emb_dim=48, num_blocks=5, hidden_units=100, attn_heads=4
+注意：GAN 与 WavLM 是否启用完全由开关决定，不是固定每个 phase 必开。
 
-### 2.2 判别器
+### 3.2 重建损失
 
-- 文件：sv_codec_restore_gan/models/discriminators.py
-- MRD：多分辨率时域判别
-- MBD：多带宽时域判别
+`losses.py` 返回的重建总项为：
 
-### 2.3 损失
+- rec_total = si_sdr_weight * si_sdr_term + mrstft_weight * mrstft_term + complex_weight * complex_term
 
-- 文件：sv_codec_restore_gan/models/losses.py
-- 重建损失：
-  - L_rec = 2*L_SDR + 1.5*L_LSD + 70*L_mag + 30*(L_real + L_imag)
-- GAN损失：
-  - L_gan = L_adv + 0.2*L_feat
-- phase3 额外任务损失：
-  - L_wavlm = 1 - cos(WavLM(restored), WavLM(clean))
-  - L_spk = 1 - cos(CAM++(restored), CAM++(clean))
-- phase3 总损失：
-  - L = 10*L_rec + L_adv + 0.2*L_feat + 1.0*L_wavlm + 3.0*L_spk
+其中日志中的 `si_sdr` 是损失形式（通常为 `-SI-SDR`），出现负值是正常现象。
 
-## 3. 三阶段训练
+### 3.3 Speaker 相关损失
 
-- 文件：sv_codec_restore_gan/train/engine.py
+- CAMP++ embedding loss（`use_campplus_train_loss`）：
+  - spk_raw = 1 - cos(emb_rest, emb_clean)
+  - spk_weighted = spk_loss_weight * spk_raw
 
-### Phase1
+- CAMP++ deep feature loss（`use_campplus_feat_loss`）：
+  - 对 `campplus_feat_layers` 指定层做 L1，层间取平均
+  - spk_feat_weighted = campplus_feat_loss_weight * spk_feat_raw
 
-- 仅训练生成器
-- 优化目标：10*L_rec
-- 建议：先确认验证集 rec 指标稳定下降
+- AM-Softmax（`use_spk_amsoftmax`）：
+  - spk_cls_weighted = spk_cls_loss_weight * spk_cls_raw
 
-学习率策略（当前实现）：
+### 3.4 GAN 与 WavLM（仅在 phase3 且开关开启时）
 
-- 优化器：AdamW（G 与 D）
-- 调度器：线性热身 + 余弦退火（step 级）
-- G 在全训练步长上调度，D 在 phase2+phase3 有效步长上调度
+- GAN 项：`adv_loss_weight * adv_g + fm_loss_weight * feat_g`
+- WavLM 项：`wavlm_loss_weight * wavlm_term`
 
-### Phase2
+### 3.5 生成器总损失
 
-- 打开 MRD+MBD
-- 优化目标：10*L_rec + L_adv + 0.2*L_feat
+- 基础：g_loss = rec_total
+- 然后按条件叠加：
+  - + spk_weighted
+  - + spk_feat_weighted
+  - + spk_cls_weighted
+  - + GAN 项（phase3 + 开启）
+  - + WavLM 项（phase3 + 开启）
 
-### Phase3
+## 4. A / B / B2 实验定位
 
-- 冻结 WavLM 与 CAM++ 特征抽取分支
-- 优化目标：10*L_rec + L_adv + 0.2*L_feat + 1.0*L_wavlm + 3.0*L_spk
-- 推荐以 EER/minDCF 选优
+### 4.1 Experiment A（Rec-only baseline）
 
-### 3.1 稳健默认超参（推荐）
+- 核心思想：先学稳定重建。
+- 常见配置：phase1>0，phase2=0，phase3=0。
+- 用途：作为后续 B/B2 的 warm-start 来源。
 
-适用于单卡先跑通并观察收敛趋势：
+### 4.2 Experiment B（CAMP++ teacher 微调）
 
-- phase1_epochs=10, phase2_epochs=10, phase3_epochs=10
-- batch_size=4, segment_seconds=2.0
-- lr_g_max=5e-4, lr_g_min=5e-6
-- lr_d_max=1e-4, lr_d_min=1e-6
-- warmup_steps_g=1000, warmup_steps_d=1000
-- weight_decay=1e-4, grad_clip=5.0
+- 核心思想：在 A 的基础上引入 speaker 约束提升 SV 保真。
+- 常见配置：phase1=0, phase2>0, phase3=0，启用 `use_campplus_train_loss`。
+- 可选：AM-Softmax 作为额外分类监督。
 
-如果训练集规模较大（>100k 对）可用更保守版本：
+### 4.3 Experiment B2（当前主推版本）
 
-- warmup_steps_g=3000, warmup_steps_d=3000
-- lr_g_min=1e-5, lr_d_min=2e-6
+- 核心思想：B 的稳态化版本，强调可微前端与 feature-level teacher 监督。
+- 常见配置：
+  - `campplus_frontend=diff_mel`
+  - `use_campplus_train_loss`
+  - `use_campplus_feat_loss`
+  - `no_use_spk_amsoftmax`（先减少目标冲突）
+  - `phase3_no_gan` + `phase3_no_wavlm`（先稳定 phase2 效果）
+- 当前日志经验：`spk_raw` 与 `spk_feat_raw` step 级波动正常，应看 epoch 均值趋势。
 
-## 4. 数据组织约定
+## 5. 模型保存与“best”定义
 
-建议采用 clean 与 coded 镜像目录：
+训练中每个 epoch 都会保存 `checkpoints/epoch_xxx.pt`，并额外维护两个 best：
 
-- clean_root/spk_id/xxx.wav
-- coded_root/spk_id/xxx.wav
+- `best_generator.pt`：按 `valid_rec` 最小保存（重建最优）。
+- `best_generator_sv.pt`：按 `valid_sv_cos` 最大保存（SV 一致性最优）。
 
-或更深层路径，但 clean 与 coded 的相对路径必须一致。
+因此，若目标是后续 SV 评测，通常需要同时比较这两个 best 的评测结果。
 
-由 build_sv_codec_manifest.py 自动对齐相对路径并输出 manifest：
+## 6. 评测实现与加速
 
-- 列：utt_id, spk_id, clean_wav, codec_wav
+`eval_sv_codec_restore_gan.py` 当前支持：
 
-### 4.1 CN-Celeb true-pair 生成流程（推荐）
+- 条件拆分评测：`--conditions clean,coded,restored`
+- restored 分块推理：`restore_chunk_seconds / overlap_seconds / chunk_batch_size`
+- embedding 缓存与增量续跑：`use_cache + cache_incremental`
+- trial 分层抽样（按正负样本对）：
+  - `trial_sample_fraction`
+  - `trial_sample_total`
+  - `trial_sample_pos_count / trial_sample_neg_count`
 
-为避免 clean 与 codec 非同源，建议直接从原始 CN-Celeb_flac 构建 true-pair 数据。
+注意：trial 抽样是“按 pair 抽样”，不等价于“按 utt 抽样”，高比例时 utt 覆盖仍可能接近全量。
 
-使用脚本：
+## 7. 数据与采样约定
 
-- my_methods_GAN/scripts/prepare_cnceleb_truepair_data.py
-- my_methods_GAN/scripts/build_sv_codec_manifest.py
-- my_methods_GAN/scripts/split_sv_manifest_by_speaker.py
-- my_methods_GAN/scripts/make_cnceleb_eval_scp.py
+- 训练数据应保持 clean/coded 成对同源。
+- 已支持 multi-codec manifest（同一 clean 对应多个 codec 路径，训练时随机采样）。
+- 已实现 clean/coded 对齐裁剪（同起点截取），避免 pair 错位。
+- 在线抽样支持 speaker 分层：`train_sample_fraction / valid_sample_fraction` + `*_stratified_sample`。
 
-流程顺序：
+## 8. 当前实践建议
 
-1. 从 raw_data/CN-Celeb_flac 转出 clean_train_wav 与 eval_clean。
-2. 对同一批 clean wav 编解码生成 coded_train_* 与 eval_coded_*。
-3. 用 clean_train_wav 与 coded_train_* 生成 pair_manifest_all.csv。
-4. 按 speaker 切分 train_manifest.csv 与 valid_manifest.csv。
-5. 按 trials.lst 生成 eval_clean.scp 与 eval_coded.scp 用于 SV 评测。
-
-这样可以确保训练与评测的 clean/coded 是同源一一对应对。
-
-### 4.2 训练加速：manifest 分层抽样
-
-当全量音频训练过慢时，可直接在 manifest 层做抽样，避免重做音频转码：
-
-- 在线抽样（训练时）：
-  - train_sv_codec_restore_gan.py 支持 train_sample_fraction / valid_sample_fraction
-  - 默认支持按 speaker 分层抽样（train_stratified_sample / valid_stratified_sample）
-- 离线抽样（切分时）：
-  - split_sv_manifest_by_speaker.py 支持 train_fraction / valid_fraction + --stratified
-
-推荐先用 1/4 抽样（0.25）做快速迭代，再回到全量训练。
-
-## 5. 评测
-
-- 文件：scripts/eval_sv_codec_restore_gan.py
-- 输入：clean_wav.scp, coded_wav.scp, trials
-- 输出：clean/coded/restored 三组 EER 与 minDCF
-- 目标：restored 在 EER/minDCF 上优于 coded
-
-## 6. 现有依赖路径
-
-- ESPnet：my_methods_GAN/espnet
-- WavLM 权重：my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt
-- WavLM 调用参考：my_methods_GAN/pretrained/WavLM/WavLM_use.py
-
-说明：若本地 WavLM.py 不在 my_methods_GAN/pretrained/WavLM 下，请补齐后再运行 phase3。
+- 先用 A 获得稳定重建初始化，再做 B/B2 微调。
+- B2 中先关闭 AM-Softmax，待重建与 SV 指标稳定后再做增量 ablation。
+- 关注 epoch 级趋势而非 step 级抖动；必要时用 `plot_epoch_spk_trend.py` 观察 `spk_raw/spk_feat_raw` 的均值与方差。

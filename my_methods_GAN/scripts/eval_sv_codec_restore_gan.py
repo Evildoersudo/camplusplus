@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchaudio.compliance.kaldi as Kaldi
+from torch.utils.data import DataLoader, Dataset
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -156,10 +157,216 @@ def load_trials(path: str | Path) -> list[tuple[int, str, str]]:
     return rows
 
 
+def _sample_without_replacement(
+    rows: list[tuple[int, str, str]],
+    count: int,
+    rng: np.random.Generator,
+) -> list[tuple[int, str, str]]:
+    if count >= len(rows):
+        return list(rows)
+    if count <= 0:
+        return []
+    idx = rng.choice(len(rows), size=count, replace=False)
+    return [rows[int(i)] for i in idx.tolist()]
+
+
+def stratified_sample_trials(
+    trials: list[tuple[int, str, str]],
+    sample_fraction: float,
+    sample_total: int,
+    sample_pos_count: int,
+    sample_neg_count: int,
+    sample_seed: int,
+) -> tuple[list[tuple[int, str, str]], dict[str, int | float | bool]]:
+    total = len(trials)
+    pos_rows = [x for x in trials if int(x[0]) == 1]
+    neg_rows = [x for x in trials if int(x[0]) == 0]
+    pos_total = len(pos_rows)
+    neg_total = len(neg_rows)
+
+    if total == 0:
+        meta = {
+            "enabled": False,
+            "total": 0,
+            "sampled": 0,
+            "pos_total": 0,
+            "neg_total": 0,
+            "pos_sampled": 0,
+            "neg_sampled": 0,
+        }
+        return [], meta
+
+    frac = float(sample_fraction)
+    sample_total = max(0, int(sample_total))
+    sample_pos_count = max(0, int(sample_pos_count))
+    sample_neg_count = max(0, int(sample_neg_count))
+
+    use_sampling = (frac < 1.0) or (sample_total > 0) or (sample_pos_count > 0) or (sample_neg_count > 0)
+    if not use_sampling:
+        meta = {
+            "enabled": False,
+            "total": total,
+            "sampled": total,
+            "pos_total": pos_total,
+            "neg_total": neg_total,
+            "pos_sampled": pos_total,
+            "neg_sampled": neg_total,
+        }
+        return trials, meta
+
+    rng = np.random.default_rng(int(sample_seed))
+    if sample_pos_count > 0 or sample_neg_count > 0:
+        target_pos = min(sample_pos_count if sample_pos_count > 0 else pos_total, pos_total)
+        target_neg = min(sample_neg_count if sample_neg_count > 0 else neg_total, neg_total)
+    elif sample_total > 0:
+        target_total = min(sample_total, total)
+        pos_ratio = float(pos_total) / float(total)
+        target_pos = int(round(target_total * pos_ratio))
+        target_pos = min(max(0, target_pos), pos_total)
+        target_neg = min(max(0, target_total - target_pos), neg_total)
+        if target_pos + target_neg < target_total:
+            room_pos = pos_total - target_pos
+            add_pos = min(target_total - (target_pos + target_neg), room_pos)
+            target_pos += add_pos
+        if target_pos + target_neg < target_total:
+            room_neg = neg_total - target_neg
+            add_neg = min(target_total - (target_pos + target_neg), room_neg)
+            target_neg += add_neg
+    else:
+        frac = min(max(frac, 0.0), 1.0)
+        target_pos = min(pos_total, int(round(pos_total * frac)))
+        target_neg = min(neg_total, int(round(neg_total * frac)))
+        if frac > 0.0:
+            if pos_total > 0 and target_pos == 0:
+                target_pos = 1
+            if neg_total > 0 and target_neg == 0:
+                target_neg = 1
+
+    sampled_pos = _sample_without_replacement(pos_rows, target_pos, rng)
+    sampled_neg = _sample_without_replacement(neg_rows, target_neg, rng)
+    sampled = sampled_pos + sampled_neg
+    if sampled:
+        rng.shuffle(sampled)
+
+    meta = {
+        "enabled": True,
+        "total": total,
+        "sampled": len(sampled),
+        "pos_total": pos_total,
+        "neg_total": neg_total,
+        "pos_sampled": len(sampled_pos),
+        "neg_sampled": len(sampled_neg),
+    }
+    return sampled, meta
+
+
+def build_trial_sampling_cache_tag(args: argparse.Namespace, trial_meta: dict[str, int | float | bool]) -> str:
+    if not bool(trial_meta.get("enabled", False)):
+        return ""
+    payload = {
+        "trials_file": str(args.trials_file),
+        "sample_fraction": float(args.trial_sample_fraction),
+        "sample_total": int(args.trial_sample_total),
+        "sample_pos_count": int(args.trial_sample_pos_count),
+        "sample_neg_count": int(args.trial_sample_neg_count),
+        "sample_seed": int(args.trial_sample_seed),
+        "sampled": int(trial_meta.get("sampled", 0)),
+        "total": int(trial_meta.get("total", 0)),
+    }
+    text = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+    digest = hashlib.md5(text.encode("utf-8")).hexdigest()[:10]
+    return f"__trialsub_{int(trial_meta.get('sampled', 0))}_{digest}"
+
+
+def parse_conditions(text: str) -> list[str]:
+    valid = {"clean", "coded", "restored"}
+    items = [x.strip().lower() for x in text.split(",") if x.strip()]
+    if not items:
+        raise ValueError("--conditions is empty")
+
+    dedup = []
+    seen = set()
+    for item in items:
+        if item not in valid:
+            raise ValueError(f"Unsupported condition: {item}")
+        if item not in seen:
+            dedup.append(item)
+            seen.add(item)
+    return dedup
+
+
 def fbank_one(wav: torch.Tensor) -> torch.Tensor:
     feat = Kaldi.fbank(wav.unsqueeze(0), num_mel_bins=80, sample_frequency=16000, dither=0.0)
     feat = feat - feat.mean(0, keepdim=True)
     return feat.unsqueeze(0)
+
+
+class PlainFbankDataset(Dataset):
+    def __init__(self, items: list[tuple[str, str]]):
+        self.items = items
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int) -> tuple[str, torch.Tensor]:
+        utt, wav_path = self.items[idx]
+        wav = load_audio_mono(wav_path, sample_rate=16000)
+        # Keep feature on CPU and defer model forward to main process/GPU.
+        feat = fbank_one(wav).squeeze(0).contiguous()
+        return utt, feat
+
+
+def _collate_plain_fbank(batch: list[tuple[str, torch.Tensor]]) -> tuple[list[str], list[torch.Tensor]]:
+    utts = [x[0] for x in batch]
+    feats = [x[1] for x in batch]
+    return utts, feats
+
+
+def _run_camp_batch(
+    camp: FrozenCampPlus,
+    device: torch.device,
+    buckets: dict[int, list[tuple[str, torch.Tensor]]],
+    out: dict[str, np.ndarray],
+    pending: dict[str, np.ndarray],
+    processed_utts: set[str],
+    max_batch_size: int,
+) -> None:
+    for tlen in list(buckets.keys()):
+        queue = buckets[tlen]
+        while len(queue) >= max_batch_size:
+            chunk = queue[:max_batch_size]
+            del queue[:max_batch_size]
+            utts = [x[0] for x in chunk]
+            feats = torch.stack([x[1] for x in chunk], dim=0).to(device)
+            emb = F.normalize(camp(feats), dim=-1)
+            emb_np = emb.detach().cpu().numpy().astype(np.float32)
+            for i, utt in enumerate(utts):
+                out[utt] = emb_np[i]
+                pending[utt] = emb_np[i]
+                processed_utts.add(utt)
+
+
+def _flush_camp_buckets(
+    camp: FrozenCampPlus,
+    device: torch.device,
+    buckets: dict[int, list[tuple[str, torch.Tensor]]],
+    out: dict[str, np.ndarray],
+    pending: dict[str, np.ndarray],
+    processed_utts: set[str],
+) -> None:
+    for tlen in list(buckets.keys()):
+        queue = buckets[tlen]
+        if not queue:
+            continue
+        utts = [x[0] for x in queue]
+        feats = torch.stack([x[1] for x in queue], dim=0).to(device)
+        emb = F.normalize(camp(feats), dim=-1)
+        emb_np = emb.detach().cpu().numpy().astype(np.float32)
+        for i, utt in enumerate(utts):
+            out[utt] = emb_np[i]
+            pending[utt] = emb_np[i]
+            processed_utts.add(utt)
+        queue.clear()
 
 
 def restore_in_chunks(
@@ -264,7 +471,141 @@ def restore_in_chunks_adaptive(
             cur_chunk_seconds = next_chunk_seconds
 
 
-def extract_emb(
+def _init_embedding_state(
+    mode: str,
+    cache_path: Path | None,
+    overwrite_cache: bool,
+    cache_incremental: bool,
+    cache_save_every: int,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], set[str], Path | None, int, int]:
+    out: dict[str, np.ndarray] = {}
+    pending: dict[str, np.ndarray] = {}
+    processed_utts: set[str] = set()
+    part_id = 0
+    save_every = max(1, int(cache_save_every))
+
+    parts_dir = _cache_parts_dir(cache_path) if cache_path is not None else None
+    if cache_incremental and cache_path is not None and parts_dir is not None and parts_dir.exists() and not overwrite_cache:
+        out = load_embedding_parts(parts_dir)
+        processed_utts = set(out.keys())
+        existing_parts = sorted(parts_dir.glob("part_*.npz"))
+        part_id = len(existing_parts)
+        print(f"[{mode}] resume from incremental cache: {parts_dir} (loaded={len(out)})")
+
+    return out, pending, processed_utts, parts_dir, part_id, save_every
+
+
+def _flush_incremental_cache(
+    mode: str,
+    pending: dict[str, np.ndarray],
+    cache_path: Path | None,
+    parts_dir: Path | None,
+    part_id: int,
+) -> int:
+    if not pending or cache_path is None or parts_dir is None:
+        return part_id
+    part_id += 1
+    part_path = _write_cache_part(parts_dir, part_id, pending)
+    print(f"[{mode}] incremental cache part saved: {part_path} (items={len(pending)})")
+    pending.clear()
+    return part_id
+
+
+def extract_emb_plain(
+    utt2wav: dict[str, str],
+    mode: str,
+    camp: FrozenCampPlus,
+    device: torch.device,
+    cache_path: Path | None,
+    overwrite_cache: bool,
+    cache_save_every: int,
+    cache_incremental: bool,
+    plain_loader_batch_size: int,
+    plain_num_workers: int,
+    plain_camp_batch_size: int,
+) -> dict[str, np.ndarray]:
+    if cache_path is not None and cache_path.exists() and not overwrite_cache:
+        print(f"[{mode}] load embedding cache: {cache_path}")
+        return load_embedding_cache(cache_path)
+
+    out, pending, processed_utts, parts_dir, part_id, save_every = _init_embedding_state(
+        mode=mode,
+        cache_path=cache_path,
+        overwrite_cache=overwrite_cache,
+        cache_incremental=cache_incremental,
+        cache_save_every=cache_save_every,
+    )
+
+    camp.eval()
+    items = [(utt, wav_path) for utt, wav_path in utt2wav.items() if utt not in processed_utts]
+    total = len(items)
+    if total == 0:
+        if cache_path is not None:
+            save_embedding_cache(cache_path, out)
+            print(f"[{mode}] save embedding cache: {cache_path}")
+        return out
+
+    loader_batch_size = max(1, int(plain_loader_batch_size))
+    num_workers = max(0, int(plain_num_workers))
+    camp_batch_size = max(1, int(plain_camp_batch_size))
+
+    loader_kwargs = {
+        "batch_size": loader_batch_size,
+        "shuffle": False,
+        "num_workers": num_workers,
+        "collate_fn": _collate_plain_fbank,
+        "pin_memory": device.type == "cuda",
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+
+    loader = DataLoader(PlainFbankDataset(items), **loader_kwargs)
+
+    buckets: dict[int, list[tuple[str, torch.Tensor]]] = {}
+    next_report = 200
+    with torch.inference_mode():
+        for utts, feats in loader:
+            for utt, feat in zip(utts, feats):
+                tlen = int(feat.shape[0])
+                buckets.setdefault(tlen, []).append((utt, feat))
+
+            _run_camp_batch(
+                camp=camp,
+                device=device,
+                buckets=buckets,
+                out=out,
+                pending=pending,
+                processed_utts=processed_utts,
+                max_batch_size=camp_batch_size,
+            )
+
+            processed_cnt = len(processed_utts)
+            while processed_cnt >= next_report:
+                print(f"[{mode}] {processed_cnt}/{total}")
+                next_report += 200
+
+            if cache_incremental and cache_path is not None and parts_dir is not None and len(pending) >= save_every:
+                part_id = _flush_incremental_cache(mode, pending, cache_path, parts_dir, part_id)
+
+        _flush_camp_buckets(
+            camp=camp,
+            device=device,
+            buckets=buckets,
+            out=out,
+            pending=pending,
+            processed_utts=processed_utts,
+        )
+
+    if cache_incremental and cache_path is not None and parts_dir is not None:
+        part_id = _flush_incremental_cache(mode, pending, cache_path, parts_dir, part_id)
+
+    if cache_path is not None:
+        save_embedding_cache(cache_path, out)
+        print(f"[{mode}] save embedding cache: {cache_path}")
+    return out
+
+
+def extract_emb_restored(
     utt2wav: dict[str, str],
     mode: str,
     generator: SVCodecRestoreGenerator,
@@ -285,19 +626,13 @@ def extract_emb(
         print(f"[{mode}] load embedding cache: {cache_path}")
         return load_embedding_cache(cache_path)
 
-    out: dict[str, np.ndarray] = {}
-    pending: dict[str, np.ndarray] = {}
-    processed_utts: set[str] = set()
-    part_id = 0
-    save_every = max(1, int(cache_save_every))
-
-    parts_dir = _cache_parts_dir(cache_path) if cache_path is not None else None
-    if cache_incremental and cache_path is not None and parts_dir is not None and parts_dir.exists() and not overwrite_cache:
-        out = load_embedding_parts(parts_dir)
-        processed_utts = set(out.keys())
-        existing_parts = sorted(parts_dir.glob("part_*.npz"))
-        part_id = len(existing_parts)
-        print(f"[{mode}] resume from incremental cache: {parts_dir} (loaded={len(out)})")
+    out, pending, processed_utts, parts_dir, part_id, save_every = _init_embedding_state(
+        mode=mode,
+        cache_path=cache_path,
+        overwrite_cache=overwrite_cache,
+        cache_incremental=cache_incremental,
+        cache_save_every=cache_save_every,
+    )
 
     generator.eval()
     camp.eval()
@@ -307,29 +642,29 @@ def extract_emb(
                 continue
 
             wav = load_audio_mono(wav_path, sample_rate=16000)
-            if mode == "restored":
-                if restore_auto_shrink:
-                    wav = restore_in_chunks_adaptive(
-                        wav,
-                        generator,
-                        device,
-                        chunk_seconds=restore_chunk_seconds,
-                        overlap_seconds=restore_overlap_seconds,
-                        chunk_batch_size=restore_chunk_batch_size,
-                        min_chunk_seconds=restore_min_chunk_seconds,
-                        chunk_shrink_factor=restore_chunk_shrink_factor,
-                        sample_rate=16000,
-                    )
-                else:
-                    wav = restore_in_chunks(
-                        wav,
-                        generator,
-                        device,
-                        chunk_seconds=restore_chunk_seconds,
-                        overlap_seconds=restore_overlap_seconds,
-                        chunk_batch_size=restore_chunk_batch_size,
-                        sample_rate=16000,
-                    )
+            if restore_auto_shrink:
+                wav = restore_in_chunks_adaptive(
+                    wav,
+                    generator,
+                    device,
+                    chunk_seconds=restore_chunk_seconds,
+                    overlap_seconds=restore_overlap_seconds,
+                    chunk_batch_size=restore_chunk_batch_size,
+                    min_chunk_seconds=restore_min_chunk_seconds,
+                    chunk_shrink_factor=restore_chunk_shrink_factor,
+                    sample_rate=16000,
+                )
+            else:
+                wav = restore_in_chunks(
+                    wav,
+                    generator,
+                    device,
+                    chunk_seconds=restore_chunk_seconds,
+                    overlap_seconds=restore_overlap_seconds,
+                    chunk_batch_size=restore_chunk_batch_size,
+                    sample_rate=16000,
+                )
+
             feat = fbank_one(wav).to(device)
             emb = camp(feat).squeeze(0)
             emb = F.normalize(emb, dim=-1)
@@ -343,18 +678,12 @@ def extract_emb(
                 print(f"[{mode}] {idx}/{len(utt2wav)}")
 
             if cache_incremental and cache_path is not None and parts_dir is not None and len(pending) >= save_every:
-                part_id += 1
-                part_path = _write_cache_part(parts_dir, part_id, pending)
-                print(f"[{mode}] incremental cache part saved: {part_path} (items={len(pending)})")
-                pending.clear()
-                if device.type == "cuda" and mode == "restored":
+                part_id = _flush_incremental_cache(mode, pending, cache_path, parts_dir, part_id)
+                if device.type == "cuda":
                     torch.cuda.empty_cache()
 
-    if cache_incremental and cache_path is not None and parts_dir is not None and pending:
-        part_id += 1
-        part_path = _write_cache_part(parts_dir, part_id, pending)
-        print(f"[{mode}] incremental cache part saved: {part_path} (items={len(pending)})")
-        pending.clear()
+    if cache_incremental and cache_path is not None and parts_dir is not None:
+        part_id = _flush_incremental_cache(mode, pending, cache_path, parts_dir, part_id)
 
     if cache_path is not None:
         save_embedding_cache(cache_path, out)
@@ -363,14 +692,16 @@ def extract_emb(
 
 
 def score_trials(trials, embd) -> tuple[list[int], list[float]]:
-    labels, scores = [], []
-    for label, u1, u2 in trials:
-        if u1 not in embd or u2 not in embd:
-            continue
-        s = float(np.dot(embd[u1], embd[u2]) / (np.linalg.norm(embd[u1]) * np.linalg.norm(embd[u2]) + 1e-8))
-        labels.append(label)
-        scores.append(s)
-    return labels, scores
+    valid_rows = [(label, u1, u2) for label, u1, u2 in trials if u1 in embd and u2 in embd]
+    if not valid_rows:
+        return [], []
+
+    labels = np.asarray([row[0] for row in valid_rows], dtype=np.int32)
+    e1 = np.stack([embd[row[1]] for row in valid_rows], axis=0).astype(np.float32, copy=False)
+    e2 = np.stack([embd[row[2]] for row in valid_rows], axis=0).astype(np.float32, copy=False)
+    denom = np.linalg.norm(e1, axis=1) * np.linalg.norm(e2, axis=1)
+    scores = np.sum(e1 * e2, axis=1) / np.clip(denom, 1e-8, None)
+    return labels.tolist(), scores.astype(np.float64).tolist()
 
 
 def parse_args():
@@ -378,12 +709,18 @@ def parse_args():
     p.add_argument("--clean_wav_scp", type=str, required=True)
     p.add_argument("--coded_wav_scp", type=str, required=True)
     p.add_argument("--trials_file", type=str, required=True)
-    p.add_argument("--generator_ckpt", type=str, required=True)
+    p.add_argument("--trial_sample_fraction", type=float, default=1.0, help="Stratified sample fraction on trials by label (0,1]. 1.0 means full trials.")
+    p.add_argument("--trial_sample_total", type=int, default=0, help="Stratified sample total trial count. >0 overrides --trial_sample_fraction.")
+    p.add_argument("--trial_sample_pos_count", type=int, default=0, help="Stratified sample positive trial count. >0 enables explicit per-class count sampling.")
+    p.add_argument("--trial_sample_neg_count", type=int, default=0, help="Stratified sample negative trial count. >0 enables explicit per-class count sampling.")
+    p.add_argument("--trial_sample_seed", type=int, default=42, help="Random seed for stratified trial sampling.")
+    p.add_argument("--conditions", type=str, default="clean,coded,restored", help="Comma-separated eval conditions: clean,coded,restored")
+    p.add_argument("--generator_ckpt", type=str, default="", help="Required only when conditions include restored.")
     p.add_argument("--campplus_ckpt", type=str, required=True)
     p.add_argument("--output_json", type=str, required=True)
     p.add_argument("--restore_chunk_seconds", type=float, default=8.0, help="Chunk size (seconds) for restored inference. <=0 means full-utterance inference.")
-    p.add_argument("--restore_overlap_seconds", type=float, default=0.5, help="Chunk overlap (seconds) for restored inference.")
-    p.add_argument("--restore_chunk_batch_size", type=int, default=8, help="Batch size for restored chunk inference on GPU/CPU.")
+    p.add_argument("--restore_overlap_seconds", type=float, default=0.1, help="Chunk overlap (seconds) for restored inference.")
+    p.add_argument("--restore_chunk_batch_size", type=int, default=16, help="Batch size for restored chunk inference on GPU/CPU.")
     p.add_argument("--restore_auto_shrink", action="store_true", help="Auto shrink chunk size and retry when restored inference hits CUDA OOM.")
     p.add_argument("--no_restore_auto_shrink", action="store_false", dest="restore_auto_shrink", help="Disable adaptive chunk shrinking on CUDA OOM.")
     p.set_defaults(restore_auto_shrink=True)
@@ -398,6 +735,9 @@ def parse_args():
     p.add_argument("--cache_incremental", action="store_true", help="Enable incremental cache write and resume.")
     p.add_argument("--no_cache_incremental", action="store_false", dest="cache_incremental", help="Disable incremental cache write and resume.")
     p.set_defaults(cache_incremental=True)
+    p.add_argument("--plain_loader_batch_size", type=int, default=64, help="DataLoader batch size for plain (clean/coded) feature extraction workers.")
+    p.add_argument("--plain_num_workers", type=int, default=4, help="DataLoader worker count for plain (clean/coded) feature extraction.")
+    p.add_argument("--plain_camp_batch_size", type=int, default=32, help="CAMP++ batch size for plain branches (same-frame-length grouped).")
     p.add_argument("--dump_speaker_npy_dir", type=str, default="", help="If set, dump per-speaker embedding .npy files under <dir>/{clean,coded,restored}/")
     p.add_argument("--speaker_id_sep", type=str, default="/", help="Separator for parsing speaker id from utt key.")
     p.add_argument("--speaker_id_field", type=int, default=0, help="Field index after split for speaker id extraction.")
@@ -408,21 +748,69 @@ def parse_args():
 def main():
     args = parse_args()
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
+    conditions = parse_conditions(args.conditions)
+
+    if args.trial_sample_fraction <= 0:
+        raise ValueError("--trial_sample_fraction must be > 0")
+
+    if args.overwrite_cache:
+        print("[cache] --overwrite_cache is enabled: existing caches will be ignored and recomputed.")
+    if not args.use_cache:
+        print("[cache] --use_cache is disabled: all embeddings will be recomputed.")
+    elif not args.cache_incremental:
+        print("[cache] incremental cache is disabled; resume capability is off.")
 
     clean_scp = load_scp(args.clean_wav_scp)
     coded_scp = load_scp(args.coded_wav_scp)
-    trials = load_trials(args.trials_file)
-
-    ckpt = torch.load(str(Path(args.generator_ckpt).resolve()), map_location="cpu")
-    model_args = ckpt.get("args", {})
-    generator = SVCodecRestoreGenerator(
-        emb_dim=int(model_args.get("emb_dim", 48)),
-        num_blocks=int(model_args.get("num_blocks", 5)),
-        hidden_units=int(model_args.get("hidden_units", 100)),
-        attn_heads=int(model_args.get("attn_heads", 4)),
+    all_trials = load_trials(args.trials_file)
+    trials, trial_meta = stratified_sample_trials(
+        all_trials,
+        sample_fraction=args.trial_sample_fraction,
+        sample_total=args.trial_sample_total,
+        sample_pos_count=args.trial_sample_pos_count,
+        sample_neg_count=args.trial_sample_neg_count,
+        sample_seed=args.trial_sample_seed,
     )
-    generator.load_state_dict(ckpt["generator"])
-    generator.to(device)
+    if trial_meta["enabled"]:
+        print(
+            "[trials] stratified sampled: "
+            f"total={trial_meta['total']} -> sampled={trial_meta['sampled']} "
+            f"(pos {trial_meta['pos_sampled']}/{trial_meta['pos_total']}, "
+            f"neg {trial_meta['neg_sampled']}/{trial_meta['neg_total']})"
+        )
+
+    if not trials:
+        raise RuntimeError("No trials available after stratified sampling. Please adjust trial sampling arguments.")
+
+    required_utts = {u for _, u1, u2 in trials for u in (u1, u2)}
+    clean_scp_eval = {utt: wav for utt, wav in clean_scp.items() if utt in required_utts}
+    coded_scp_eval = {utt: wav for utt, wav in coded_scp.items() if utt in required_utts}
+
+    if "clean" in conditions:
+        missing_clean = len(required_utts) - len(clean_scp_eval)
+        if missing_clean > 0:
+            print(f"[clean] warning: {missing_clean} utts in sampled trials are missing in clean scp")
+    if "coded" in conditions or "restored" in conditions:
+        missing_coded = len(required_utts) - len(coded_scp_eval)
+        if missing_coded > 0:
+            print(f"[coded/restored] warning: {missing_coded} utts in sampled trials are missing in coded scp")
+
+    generator = None
+    gen_tag = "none"
+    if "restored" in conditions:
+        if not args.generator_ckpt:
+            raise ValueError("--generator_ckpt is required when --conditions includes restored")
+        ckpt = torch.load(str(Path(args.generator_ckpt).resolve()), map_location="cpu")
+        model_args = ckpt.get("args", {})
+        generator = SVCodecRestoreGenerator(
+            emb_dim=int(model_args.get("emb_dim", 48)),
+            num_blocks=int(model_args.get("num_blocks", 5)),
+            hidden_units=int(model_args.get("hidden_units", 100)),
+            attn_heads=int(model_args.get("attn_heads", 4)),
+        )
+        generator.load_state_dict(ckpt["generator"])
+        generator.to(device)
+        gen_tag = Path(args.generator_ckpt).stem
 
     camp = FrozenCampPlus(args.campplus_ckpt).to(device)
 
@@ -435,65 +823,62 @@ def main():
         clean_scp_tag = Path(args.clean_wav_scp).stem
         coded_scp_tag = Path(args.coded_wav_scp).stem
         camp_tag = Path(args.campplus_ckpt).stem
-        gen_tag = Path(args.generator_ckpt).stem
-        clean_cache = cache_dir / f"clean__{clean_scp_tag}__camp_{camp_tag}.npz"
-        coded_cache = cache_dir / f"coded__{coded_scp_tag}__camp_{camp_tag}.npz"
-        restored_cache = cache_dir / f"restored__{coded_scp_tag}__gen_{gen_tag}__camp_{camp_tag}.npz"
+        sample_tag = build_trial_sampling_cache_tag(args, trial_meta)
+        clean_cache = cache_dir / f"clean__{clean_scp_tag}__camp_{camp_tag}{sample_tag}.npz"
+        coded_cache = cache_dir / f"coded__{coded_scp_tag}__camp_{camp_tag}{sample_tag}.npz"
+        restored_cache = cache_dir / f"restored__{coded_scp_tag}__gen_{gen_tag}__camp_{camp_tag}{sample_tag}.npz"
 
-    clean_emb = extract_emb(
-        clean_scp,
-        "clean",
-        generator,
-        camp,
-        device,
-        restore_chunk_seconds=args.restore_chunk_seconds,
-        restore_overlap_seconds=args.restore_overlap_seconds,
-        restore_chunk_batch_size=args.restore_chunk_batch_size,
-        restore_auto_shrink=args.restore_auto_shrink,
-        restore_min_chunk_seconds=args.restore_min_chunk_seconds,
-        restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
-        cache_path=clean_cache,
-        overwrite_cache=args.overwrite_cache,
-        cache_save_every=args.cache_save_every,
-        cache_incremental=args.cache_incremental,
-    )
-    coded_emb = extract_emb(
-        coded_scp,
-        "coded",
-        generator,
-        camp,
-        device,
-        restore_chunk_seconds=args.restore_chunk_seconds,
-        restore_overlap_seconds=args.restore_overlap_seconds,
-        restore_chunk_batch_size=args.restore_chunk_batch_size,
-        restore_auto_shrink=args.restore_auto_shrink,
-        restore_min_chunk_seconds=args.restore_min_chunk_seconds,
-        restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
-        cache_path=coded_cache,
-        overwrite_cache=args.overwrite_cache,
-        cache_save_every=args.cache_save_every,
-        cache_incremental=args.cache_incremental,
-    )
-    restored_emb = extract_emb(
-        coded_scp,
-        "restored",
-        generator,
-        camp,
-        device,
-        restore_chunk_seconds=args.restore_chunk_seconds,
-        restore_overlap_seconds=args.restore_overlap_seconds,
-        restore_chunk_batch_size=args.restore_chunk_batch_size,
-        restore_auto_shrink=args.restore_auto_shrink,
-        restore_min_chunk_seconds=args.restore_min_chunk_seconds,
-        restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
-        cache_path=restored_cache,
-        overwrite_cache=args.overwrite_cache,
-        cache_save_every=args.cache_save_every,
-        cache_incremental=args.cache_incremental,
-    )
+    emb_by_mode: dict[str, dict[str, np.ndarray]] = {}
+    if "clean" in conditions:
+        emb_by_mode["clean"] = extract_emb_plain(
+            clean_scp_eval,
+            "clean",
+            camp,
+            device,
+            cache_path=clean_cache,
+            overwrite_cache=args.overwrite_cache,
+            cache_save_every=args.cache_save_every,
+            cache_incremental=args.cache_incremental,
+            plain_loader_batch_size=args.plain_loader_batch_size,
+            plain_num_workers=args.plain_num_workers,
+            plain_camp_batch_size=args.plain_camp_batch_size,
+        )
+    if "coded" in conditions:
+        emb_by_mode["coded"] = extract_emb_plain(
+            coded_scp_eval,
+            "coded",
+            camp,
+            device,
+            cache_path=coded_cache,
+            overwrite_cache=args.overwrite_cache,
+            cache_save_every=args.cache_save_every,
+            cache_incremental=args.cache_incremental,
+            plain_loader_batch_size=args.plain_loader_batch_size,
+            plain_num_workers=args.plain_num_workers,
+            plain_camp_batch_size=args.plain_camp_batch_size,
+        )
+    if "restored" in conditions:
+        emb_by_mode["restored"] = extract_emb_restored(
+            coded_scp_eval,
+            "restored",
+            generator,
+            camp,
+            device,
+            restore_chunk_seconds=args.restore_chunk_seconds,
+            restore_overlap_seconds=args.restore_overlap_seconds,
+            restore_chunk_batch_size=args.restore_chunk_batch_size,
+            restore_auto_shrink=args.restore_auto_shrink,
+            restore_min_chunk_seconds=args.restore_min_chunk_seconds,
+            restore_chunk_shrink_factor=args.restore_chunk_shrink_factor,
+            cache_path=restored_cache,
+            overwrite_cache=args.overwrite_cache,
+            cache_save_every=args.cache_save_every,
+            cache_incremental=args.cache_incremental,
+        )
 
     results = []
-    for name, emb in [("clean", clean_emb), ("coded", coded_emb), ("restored", restored_emb)]:
+    for name in conditions:
+        emb = emb_by_mode[name]
         labels, scores = score_trials(trials, emb)
         eer, min_dcf = compute_eer_mindcf(labels, scores)
         results.append(
@@ -508,27 +893,14 @@ def main():
 
     if args.dump_speaker_npy_dir:
         dump_root = Path(args.dump_speaker_npy_dir).resolve()
-        dump_speaker_embeddings(
-            clean_emb,
-            mode="clean",
-            dump_root=dump_root,
-            speaker_id_sep=args.speaker_id_sep,
-            speaker_id_field=args.speaker_id_field,
-        )
-        dump_speaker_embeddings(
-            coded_emb,
-            mode="coded",
-            dump_root=dump_root,
-            speaker_id_sep=args.speaker_id_sep,
-            speaker_id_field=args.speaker_id_field,
-        )
-        dump_speaker_embeddings(
-            restored_emb,
-            mode="restored",
-            dump_root=dump_root,
-            speaker_id_sep=args.speaker_id_sep,
-            speaker_id_field=args.speaker_id_field,
-        )
+        for mode in conditions:
+            dump_speaker_embeddings(
+                emb_by_mode[mode],
+                mode=mode,
+                dump_root=dump_root,
+                speaker_id_sep=args.speaker_id_sep,
+                speaker_id_field=args.speaker_id_field,
+            )
 
     out = Path(args.output_json).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)

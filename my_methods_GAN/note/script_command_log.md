@@ -123,6 +123,14 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/sv_codec_restore_gan/models/losses.py
   - my_methods_GAN/sv_codec_restore_gan/train/engine.py
   - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+- 2026-04-09: 修改脚本并更新命令（评测加速：plain/restored提取分离 + 条件拆分运行 + trial向量化打分）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-09: 修改脚本并更新命令（评测加速：plain分支 DataLoader 多进程预取 + 同帧长分桶批量 CAM++ 前向）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-09: 修改脚本并更新命令（评测支持按 trials 正负样本对分层抽样 + 仅抽样 utt 提取 embedding）
+  - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
+- 2026-04-10: 新增脚本并登记命令（按 epoch 汇总并绘制 spk_raw/spk_feat_raw 趋势）
+  - my_methods_GAN/scripts/plot_epoch_spk_trend.py
 
 ## 0. 环境准备
 
@@ -294,7 +302,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --hidden_units 100 \
   --attn_heads 4 \
   --lr_g_max 3e-4 \
-  --lr_g_min 1e-5 \
+  --lr_g_min 1e-4 \
   --warmup_steps_g 200 \
   --si_sdr_weight 2 \
   --mrstft_weight 1 \
@@ -308,6 +316,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --wavlm_root my_methods_GAN/pretrained/WavLM \
   --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --resume \
   --device cuda
 ```
 
@@ -355,10 +364,10 @@ Experiment B2（按 GAN 改善第二版：关闭 AM-Softmax，启用 deep featur
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
   --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25 \
-  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25/best_generator.pt \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3 \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/checkpoints/epoch_008.pt \
   --phase1_epochs 0 \
-  --phase2_epochs 6 \
+  --phase2_epochs 10 \
   --phase3_epochs 0 \
   --batch_size 24 \
   --num_workers 8 \
@@ -366,16 +375,16 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --phase2_segment_seconds 4.0 \
   --lr_g_max 5e-5 \
   --lr_g_min 1e-5 \
-  --warmup_steps_g 100 \
+  --warmup_steps_g 50 \
   --si_sdr_weight 1.0 \
   --mrstft_weight 0.5 \
   --complex_weight 0.0 \
   --use_campplus_train_loss \
   --use_campplus_feat_loss \
   --campplus_feat_layers block2,out_nonlinear \
-  --campplus_feat_loss_weight 0.5 \
+  --campplus_feat_loss_weight 1 \
   --campplus_frontend diff_mel \
-  --spk_loss_weight 5 \
+  --spk_loss_weight 3 \
   --no_use_spk_amsoftmax \
   --phase3_no_gan \
   --phase3_no_wavlm \
@@ -560,11 +569,13 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25/best_generator_sv.pt \
+  --trial_sample_fraction 1.0 \
+  --conditions clean,coded,restored \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/checkpoints/epoch_004.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_second.json \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_third.json \
   --restore_chunk_seconds 8 \
-  --restore_overlap_seconds 0.5 \
+  --restore_overlap_seconds 0.1 \
   --restore_chunk_batch_size 16 \
   --restore_auto_shrink \
   --restore_min_chunk_seconds 1.0 \
@@ -572,6 +583,9 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --use_cache \
   --cache_incremental \
   --cache_save_every 500 \
+  --plain_loader_batch_size 64 \
+  --plain_num_workers 4 \
+  --plain_camp_batch_size 32 \
   --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
   --dump_speaker_npy_dir my_methods_GAN/exp/sv_codec_restore/run_main/speaker_emb_npy \
   --speaker_id_sep / \
@@ -582,20 +596,74 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
 参数说明：
 
 - `--restore_chunk_seconds`：restored 路径分块长度（秒），默认 8。
-- `--restore_overlap_seconds`：相邻块重叠长度（秒），默认 0.5。
-- `--restore_chunk_batch_size`：restored 分块批量前向 batch size，默认 8；显存允许可尝试 12/16 提速。
+- `--restore_overlap_seconds`：相邻块重叠长度（秒），默认 0.1。
+- `--restore_chunk_batch_size`：restored 分块批量前向 batch size，默认 16；显存允许可尝试 32 提速。
 - `--restore_auto_shrink`：遇到 CUDA OOM 自动缩小 chunk 并重试（默认开启）。
 - `--restore_min_chunk_seconds`：自动缩块最小下限（秒），默认 1.0。
 - `--restore_chunk_shrink_factor`：每次 OOM 后的缩放比例，默认 0.7。
 - `--use_cache`：启用本地 embedding 缓存（默认开启）。
 - `--cache_incremental`：按间隔增量写盘并支持中断续跑（默认开启）。
 - `--cache_save_every`：每 N 条 utt 写一次增量缓存分片，默认 500。
+- `--trial_sample_fraction`：按标签分层抽样比例，默认 1.0（全量）；例如 `0.2` 表示在正/负样本中分别抽取约 20%。
+- `--trial_sample_total`：分层抽样后总 trial 数，`>0` 时优先于 `--trial_sample_fraction`。
+- `--trial_sample_pos_count`：显式指定抽样正样本对数量；`>0` 时启用按类计数抽样。
+- `--trial_sample_neg_count`：显式指定抽样负样本对数量；`>0` 时启用按类计数抽样。
+- `--trial_sample_seed`：分层抽样随机种子，默认 42。
+- `--plain_loader_batch_size`：clean/coded 分支 DataLoader 取样批大小（默认 64）。
+- `--plain_num_workers`：clean/coded 分支 DataLoader worker 数（默认 4）。
+- `--plain_camp_batch_size`：clean/coded 分支 CAM++ 前向批大小（默认 32，按相同帧长分桶后批处理）。
 - `--cache_dir`：缓存目录，默认 `<output_json目录>/emb_cache`。
 - `--overwrite_cache`：强制重算并覆盖已有缓存。
+- `--conditions`：按条件评测，可选 `clean`、`coded`、`restored`，逗号分隔；用于拆分评测避免重复耗时。
+- `--generator_ckpt`：仅当 `--conditions` 包含 `restored` 时必填。
 - `--dump_speaker_npy_dir`：按 clean/coded/restored 分目录导出每个说话人的 embedding `.npy`。
 - `--speaker_id_sep`：从 utt 提取说话人 ID 的分隔符，默认 `/`。
 - `--speaker_id_field`：分隔后取第几个字段作为说话人 ID，默认 `0`。
 
+按条件拆分运行示例（推荐先跑 clean/coded，再单独调 restored）：
+
+```bash
+python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --trial_sample_fraction 0.2 \
+  --conditions clean,coded \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_plain.json \
+  --use_cache \
+  --cache_incremental \
+  --cache_save_every 200 \
+  --plain_loader_batch_size 64 \
+  --plain_num_workers 4 \
+  --plain_camp_batch_size 32 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
+  --device cuda
+```
+
+```bash
+python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --conditions restored \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/checkpoints/epoch_010.pt \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_restored_B_first.json \
+  --restore_chunk_seconds 8 \
+  --restore_overlap_seconds 0.1 \
+  --restore_chunk_batch_size 32 \
+  --use_cache \
+  --cache_incremental \
+  --cache_save_every 200 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
+  --device cuda
+```
+```
+  --trial_sample_pos_count 2000 \
+  --trial_sample_neg_count 2000 \
+  --trial_sample_seed 42 \
+```
 ## 3.1 单脚本评测 CAMP++（CN-Celeb 全量测试集）
 
 脚本：my_methods_GAN/scripts/eval_campplus_cnceleb.py
@@ -690,6 +758,26 @@ python my_methods_GAN/scripts/plot_train_avg_curve.py \
   --sample_every 60 \
   --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_fast/avg_train_curve_s60.png
 ```
+
+## 3.5 按 epoch 汇总 speaker loss 趋势（均值/标准差）
+
+脚本：my_methods_GAN/scripts/plot_epoch_spk_trend.py
+
+导出 phase2 的 `spk_raw/spk_feat_raw` 每个 epoch 统计（当前环境无 matplotlib 时至少会导出 CSV）：
+
+```bash
+python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/train.log \
+  --phase phase2 \
+  --metrics spk_raw,spk_feat_raw \
+  --output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.csv \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.png
+```
+
+说明：
+
+- 输出 CSV 字段包含：`*_mean`、`*_std`、`*_min`、`*_max`。
+- 若环境安装了 `matplotlib`，会同时生成 PNG 趋势图（均值 + mean±std 阴影）。
 
 ## 4. 模块入口说明（非直接脚本）
 
