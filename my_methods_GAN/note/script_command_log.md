@@ -131,6 +131,16 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/scripts/eval_sv_codec_restore_gan.py
 - 2026-04-10: 新增脚本并登记命令（按 epoch 汇总并绘制 spk_raw/spk_feat_raw 趋势）
   - my_methods_GAN/scripts/plot_epoch_spk_trend.py
+- 2026-04-11: 修改脚本并更新命令（实验C phase3：GAN轻量微调预设 + phase3-only warm-start校验）
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-11: 修改脚本（实验C训练日志打印 GAN 相关项：gan_d_raw + 生成器侧加权项 gan_adv_weighted/gan_fm_weighted）
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-11: 修改判别器与训练脚本（按判别器修改.md：STFT-MRD + 强化FM归约 + 实验C更强D策略 + GAN原始值/d_lr日志）
+  - my_methods_GAN/sv_codec_restore_gan/models/discriminators.py
+  - my_methods_GAN/sv_codec_restore_gan/models/losses.py
+  - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
+  - my_methods_GAN/sv_codec_restore_gan/train/engine.py
 
 ## 0. 环境准备
 
@@ -391,6 +401,35 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
   --device cuda
 ```
+
+Experiment C（按 实验phase3：从实验B最优checkpoint进入 phase3 轻量 GAN 微调）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/best_generator_sv.pt \
+  --batch_size 20 \
+  --num_workers 8 \
+  --segment_seconds 4.0 \
+  --phase3_segment_seconds 4.0 \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --experiment_c_preset \
+  --experiment_c_epochs 10 \
+  --device cuda
+```
+
+说明（实验C预设生效后会自动覆盖）：
+
+- `phase1_epochs=0, phase2_epochs=0, phase3_epochs=experiment_c_epochs`
+- `phase3_use_gan=True, use_mbd=False, phase3_use_wavlm=False`
+- `lr_g_max/min=2e-5/5e-6, lr_d_max/min=2e-5/5e-6, warmup_steps_g/d=50`
+- `si_sdr_weight=1.0, mrstft_weight=0.5, complex_weight=0.0`
+- `use_campplus_train_loss=True, campplus_frontend=diff_mel`
+- `spk_loss_weight=1.0, adv_loss_weight=0.05, fm_loss_weight=0.05`
+- `use_campplus_feat_loss=False, use_spk_amsoftmax=False`
+- phase3-only 训练若未提供 `--init_generator_ckpt` 且未 `--resume`，会报错阻止从头训。
 
 新增参数说明：
 
@@ -702,9 +741,9 @@ python my_methods_GAN/scripts/eval_campplus_cnceleb.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_train_avg_curve.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25_second/train.log \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/train.log \
   --sample_every 40 \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_teacher_q25_second/avg_train_curve_s40.png
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/avg_train_curve_s40.png
 ```
 
 ## 3.3 下载并加载 WavLM-SV（HuggingFace）
@@ -767,11 +806,11 @@ python my_methods_GAN/scripts/plot_train_avg_curve.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/train.log \
-  --phase phase2 \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/train.log \
+  --phase phase3 \
   --metrics spk_raw,spk_feat_raw \
-  --output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.csv \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.png
+  --output_csv my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/epoch_phase3spk_trend.csv \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/epoch_phase3_spk_trend.png
 ```
 
 说明：

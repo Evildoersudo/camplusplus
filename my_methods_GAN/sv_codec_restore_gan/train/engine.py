@@ -303,6 +303,32 @@ def train_main(args: argparse.Namespace) -> None:
     phase2_epochs = int(args.phase2_epochs)
     phase3_epochs = int(args.phase3_epochs)
     total_epochs = phase1_epochs + phase2_epochs + phase3_epochs
+
+    if total_epochs <= 0:
+        raise ValueError("Total epochs must be > 0. Check phase1/phase2/phase3 epoch settings.")
+
+    # Enforce warm-start for phase3-only setup to match Experiment C design.
+    if phase1_epochs == 0 and phase2_epochs == 0 and phase3_epochs > 0:
+        if not getattr(args, "resume", False) and not getattr(args, "init_generator_ckpt", ""):
+            raise ValueError(
+                "Phase3-only training requires --init_generator_ckpt (or --resume) to warm-start from Experiment B checkpoint."
+            )
+
+    _emit(
+        "[config] phases: phase1={} phase2={} phase3={} | phase3_use_gan={} use_mbd={} phase3_use_wavlm={} | "
+        "spk_loss_weight={} adv_loss_weight={} fm_loss_weight={}".format(
+            phase1_epochs,
+            phase2_epochs,
+            phase3_epochs,
+            args.phase3_use_gan,
+            args.use_mbd,
+            args.phase3_use_wavlm,
+            args.spk_loss_weight,
+            args.adv_loss_weight,
+            args.fm_loss_weight,
+        )
+    )
+
     wavlm = None
     camp = None
 
@@ -482,6 +508,7 @@ def train_main(args: argparse.Namespace) -> None:
 
             adv_g = torch.zeros((), device=device)
             feat_g = torch.zeros((), device=device)
+            d_loss = torch.zeros((), device=device)
             wavlm_term = torch.zeros((), device=device)
             spk_term = torch.zeros((), device=device)
             spk_weighted_term = torch.zeros((), device=device)
@@ -489,6 +516,9 @@ def train_main(args: argparse.Namespace) -> None:
             spk_cls_weighted_term = torch.zeros((), device=device)
             spk_feat_term = torch.zeros((), device=device)
             spk_feat_weighted_term = torch.zeros((), device=device)
+            gan_adv_weighted_term = torch.zeros((), device=device)
+            gan_fm_weighted_term = torch.zeros((), device=device)
+            d_lr_current = 0.0
             camp_grad_msg = ""
 
             if phase == "phase3" and opt_d is not None:
@@ -501,6 +531,7 @@ def train_main(args: argparse.Namespace) -> None:
                 )
                 for group in opt_d.param_groups:
                     group["lr"] = d_lr
+                d_lr_current = float(d_lr)
 
                 do_d_step = ((step - 1) % args.d_update_interval == 0)
                 real_mrd = mrd(clean) if mrd is not None else []
@@ -508,7 +539,6 @@ def train_main(args: argparse.Namespace) -> None:
                 real_mbd = mbd(clean) if mbd is not None else []
                 fake_mbd = mbd(restored.detach()) if mbd is not None else []
 
-                d_loss = torch.zeros((), device=device)
                 if real_mrd and fake_mrd:
                     d_loss = d_loss + loss_adv_discriminator(real_mrd, fake_mrd)
                 if real_mbd and fake_mbd:
@@ -604,7 +634,9 @@ def train_main(args: argparse.Namespace) -> None:
                 g_loss = g_loss + spk_cls_weighted_term
             if phase == "phase3":
                 if opt_d is not None:
-                    g_loss = g_loss + args.adv_loss_weight * adv_g + args.fm_loss_weight * feat_g
+                    gan_adv_weighted_term = args.adv_loss_weight * adv_g
+                    gan_fm_weighted_term = args.fm_loss_weight * feat_g
+                    g_loss = g_loss + gan_adv_weighted_term + gan_fm_weighted_term
                 if args.phase3_use_wavlm and wavlm is not None:
                     g_loss = g_loss + args.wavlm_loss_weight * wavlm_term
 
@@ -626,6 +658,11 @@ def train_main(args: argparse.Namespace) -> None:
             spk_cls_weighted = float(spk_cls_weighted_term.detach().cpu())
             spk_feat_raw = float(spk_feat_term.detach().cpu())
             spk_feat_weighted = float(spk_feat_weighted_term.detach().cpu())
+            gan_d_raw = float(d_loss.detach().cpu())
+            gan_adv_raw = float(adv_g.detach().cpu())
+            gan_fm_raw = float(feat_g.detach().cpu())
+            gan_adv_weighted = float(gan_adv_weighted_term.detach().cpu())
+            gan_fm_weighted = float(gan_fm_weighted_term.detach().cpu())
             generator_grad_norm = float(grad_norm.detach().cpu()) if torch.is_tensor(grad_norm) else float(grad_norm)
             step_message = (
                 f"[epoch {epoch:03d}][{phase}] step {step}/{len(train_loader)} "
@@ -637,11 +674,17 @@ def train_main(args: argparse.Namespace) -> None:
                 f"spk_feat_weighted={spk_feat_weighted:.4f} "
                 f"spk_cls_raw={spk_cls_raw:.4f} "
                 f"spk_cls_weighted={spk_cls_weighted:.4f} "
+                f"gan_d_raw={gan_d_raw:.4f} "
+                f"gan_adv_raw={gan_adv_raw:.4f} "
+                f"gan_fm_raw={gan_fm_raw:.4f} "
+                f"gan_adv_weighted={gan_adv_weighted:.4f} "
+                f"gan_fm_weighted={gan_fm_weighted:.4f} "
                 f"generator_grad_norm={generator_grad_norm:.3e} "
                 f"si_sdr={sum_sisdr/step:.4f} "
                 f"mrstft={sum_mrstft/step:.4f} "
                 f"complex={sum_complex/step:.4f} "
                 f"lr_g={opt_g.param_groups[0]['lr']:.2e} "
+                f"lr_d={d_lr_current:.2e} "
                 f"elapsed={elapsed:.1f}s"
             )
             if camp_grad_msg:

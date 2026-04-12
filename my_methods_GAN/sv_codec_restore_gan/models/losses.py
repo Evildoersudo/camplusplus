@@ -111,4 +111,6 @@ def loss_feature_matching(real_outs, fake_outs) -> torch.Tensor:
             losses.append(F.l1_loss(ff, rf.detach()))
     if not losses:
         return torch.zeros((), device=fake_outs[0][0].device)
-    return torch.stack(losses).mean()
+    # Stronger aggregation than plain mean to prevent FM values from collapsing to near-zero.
+    loss_vec = torch.stack(losses)
+    return loss_vec.sum() / (len(losses) ** 0.5)

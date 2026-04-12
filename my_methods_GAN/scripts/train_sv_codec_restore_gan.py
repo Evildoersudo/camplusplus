@@ -11,6 +11,48 @@ if __package__ is None or __package__ == "":
 from sv_codec_restore_gan.train.engine import train_main
 
 
+def apply_experiment_c_preset(args: argparse.Namespace) -> None:
+    if not getattr(args, "experiment_c_preset", False):
+        return
+
+    phase3_epochs = max(1, int(args.experiment_c_epochs))
+
+    # Experiment C: phase3-only GAN fine-tuning from Experiment B checkpoint.
+    args.phase1_epochs = 0
+    args.phase2_epochs = 0
+    args.phase3_epochs = phase3_epochs
+
+    args.phase3_use_gan = True
+    args.use_mbd = False
+    args.phase3_use_wavlm = False
+
+    args.lr_g_max = 2e-5
+    args.lr_g_min = 5e-6
+    args.lr_d_max = 5e-5
+    args.lr_d_min = 1e-5
+    args.warmup_steps_g = 50
+    args.warmup_steps_d = 50
+    args.d_update_interval = 1
+
+    args.si_sdr_weight = 1.0
+    args.mrstft_weight = 0.5
+    args.complex_weight = 0.0
+    args.spk_loss_weight = 1.0
+    args.adv_loss_weight = 0.1
+    args.fm_loss_weight = 0.5
+
+    args.use_campplus_train_loss = True
+    args.use_campplus_feat_loss = False
+    args.use_spk_amsoftmax = False
+    args.campplus_frontend = "diff_mel"
+
+    if args.phase3_segment_seconds <= 0:
+        args.phase3_segment_seconds = 4.0
+
+    if not getattr(args, "init_generator_ckpt", "") and not getattr(args, "resume", False):
+        raise ValueError("Experiment C preset requires --init_generator_ckpt (or --resume) for warm-start.")
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Train SV-CodecRestoreGAN with 3-phase strategy.")
     p.add_argument("--train_manifest", type=str, required=True)
@@ -20,6 +62,17 @@ def parse_args():
     p.add_argument("--phase1_epochs", type=int, default=25)
     p.add_argument("--phase2_epochs", type=int, default=8)
     p.add_argument("--phase3_epochs", type=int, default=0)
+    p.add_argument(
+        "--experiment_c_preset",
+        action="store_true",
+        help="Apply Experiment C preset: phase3-only GAN fine-tuning from a warm-start checkpoint.",
+    )
+    p.add_argument(
+        "--experiment_c_epochs",
+        type=int,
+        default=5,
+        help="Phase3 epochs used when --experiment_c_preset is enabled.",
+    )
 
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--num_workers", type=int, default=2)
@@ -153,6 +206,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    apply_experiment_c_preset(args)
     train_main(args)
 
 
