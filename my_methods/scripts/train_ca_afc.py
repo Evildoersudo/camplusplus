@@ -383,12 +383,11 @@ def make_dataloaders(args):
         valid_feature_manifest = Path(args.valid_feature_manifest).resolve() if args.valid_feature_manifest else None
 
         if valid_feature_manifest and valid_feature_manifest.exists():
-            train_set = PrecomputedPairFeatureDataset(train_feature_manifest, max_frames=args.max_frames, random_crop=True)
+            train_set = PrecomputedPairFeatureDataset(train_feature_manifest, max_frames=args.max_frames, random_crop=False)
             valid_set = PrecomputedPairFeatureDataset(valid_feature_manifest, max_frames=args.max_frames, random_crop=False)
         else:
-            # Build two dataset views on the same manifest so train uses random crop
-            # while valid stays deterministic (random_crop=False).
-            train_full = PrecomputedPairFeatureDataset(train_feature_manifest, max_frames=args.max_frames, random_crop=True)
+            # Build two deterministic dataset views on the same manifest.
+            train_full = PrecomputedPairFeatureDataset(train_feature_manifest, max_frames=args.max_frames, random_crop=False)
             valid_full = PrecomputedPairFeatureDataset(train_feature_manifest, max_frames=args.max_frames, random_crop=False)
             valid_len = max(1, int(len(train_full) * args.valid_ratio))
             train_len = max(1, len(train_full) - valid_len)
@@ -406,11 +405,11 @@ def make_dataloaders(args):
         valid_manifest = Path(args.valid_manifest).resolve() if args.valid_manifest else None
 
         if valid_manifest and valid_manifest.exists():
-            train_set = PairFeatureDataset(train_manifest, sample_rate=args.sample_rate, max_frames=args.max_frames, random_crop=True)
+            train_set = PairFeatureDataset(train_manifest, sample_rate=args.sample_rate, max_frames=args.max_frames, random_crop=False)
             valid_set = PairFeatureDataset(valid_manifest, sample_rate=args.sample_rate, max_frames=args.max_frames, random_crop=False)
         else:
-            # Same split indices are reused across two views to avoid random crop in valid.
-            train_full = PairFeatureDataset(train_manifest, sample_rate=args.sample_rate, max_frames=args.max_frames, random_crop=True)
+            # Same split indices are reused across two deterministic views.
+            train_full = PairFeatureDataset(train_manifest, sample_rate=args.sample_rate, max_frames=args.max_frames, random_crop=False)
             valid_full = PairFeatureDataset(train_manifest, sample_rate=args.sample_rate, max_frames=args.max_frames, random_crop=False)
             valid_len = max(1, int(len(train_full) * args.valid_ratio))
             train_len = max(1, len(train_full) - valid_len)

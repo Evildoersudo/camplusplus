@@ -116,6 +116,7 @@ def _build_loader(
     sample_fraction: float,
     sample_seed: int,
     stratified_sample: bool,
+    codec_shift_samples: dict[str, int] | None,
 ) -> DataLoader:
     ds = SVCodecPairDataset(
         manifest_csv=manifest,
@@ -124,6 +125,7 @@ def _build_loader(
         sample_fraction=sample_fraction,
         sample_seed=sample_seed,
         stratified_sample=stratified_sample,
+        codec_shift_samples=codec_shift_samples,
     )
     return DataLoader(ds, batch_size=batch_size, shuffle=train, num_workers=num_workers, collate_fn=collate_pair_batch)
 
@@ -232,6 +234,12 @@ def train_main(args: argparse.Namespace) -> None:
         log_file.write(message + "\n")
         log_file.flush()
 
+    codec_shift_samples: dict[str, int] = {}
+    if bool(getattr(args, "enable_codec_time_align", False)):
+        amr_shift = int(getattr(args, "amrwb_shift_samples", 0))
+        if amr_shift != 0:
+            codec_shift_samples["amrwb"] = amr_shift
+
     train_loader = _build_loader(
         args.train_manifest,
         args.batch_size,
@@ -241,6 +249,7 @@ def train_main(args: argparse.Namespace) -> None:
         args.train_sample_fraction,
         args.train_sample_seed,
         args.train_stratified_sample,
+        codec_shift_samples,
     )
     valid_loader = _build_loader(
         args.valid_manifest,
@@ -251,6 +260,7 @@ def train_main(args: argparse.Namespace) -> None:
         args.valid_sample_fraction,
         args.valid_sample_seed,
         args.valid_stratified_sample,
+        codec_shift_samples,
     )
     _emit(
         "[data] train samples={} valid samples={} (fractions: train={}, valid={})".format(
@@ -260,6 +270,7 @@ def train_main(args: argparse.Namespace) -> None:
             args.valid_sample_fraction,
         )
     )
+    _emit(f"[data] codec_time_align={bool(getattr(args, 'enable_codec_time_align', False))} shifts={codec_shift_samples}")
 
     _maybe_override_arch_from_init_ckpt(args, _emit)
 
@@ -430,6 +441,7 @@ def train_main(args: argparse.Namespace) -> None:
             args.train_sample_fraction,
             args.train_sample_seed,
             args.train_stratified_sample,
+            codec_shift_samples,
         )
         valid_loader = _build_loader(
             args.valid_manifest,
@@ -440,6 +452,7 @@ def train_main(args: argparse.Namespace) -> None:
             args.valid_sample_fraction,
             args.valid_sample_seed,
             args.valid_stratified_sample,
+            codec_shift_samples,
         )
 
         if phase != prev_phase:

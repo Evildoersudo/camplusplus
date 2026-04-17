@@ -294,10 +294,10 @@ Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
-  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third \
-  --phase1_epochs 25 \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_q25  \
+  --phase1_epochs 10 \
   --phase2_epochs 0 \
   --phase3_epochs 0 \
   --batch_size 24 \
@@ -313,7 +313,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --attn_heads 4 \
   --lr_g_max 3e-4 \
   --lr_g_min 1e-4 \
-  --warmup_steps_g 200 \
+  --warmup_steps_g 0 \
   --si_sdr_weight 2 \
   --mrstft_weight 1 \
   --complex_weight 1 \
@@ -329,6 +329,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --resume \
   --device cuda
 ```
+--resume \
 
 Experiment B（冻结 CAM++ teacher，使用可微 log-Mel 前端微调生成器）：
 
@@ -372,20 +373,20 @@ Experiment B2（按 GAN 改善第二版：关闭 AM-Softmax，启用 deep featur
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
-  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3 \
-  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/checkpoints/epoch_008.pt \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb\
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_007.pt \
   --phase1_epochs 0 \
   --phase2_epochs 10 \
   --phase3_epochs 0 \
-  --batch_size 24 \
+  --batch_size 22 \
   --num_workers 8 \
   --segment_seconds 4.0 \
   --phase2_segment_seconds 4.0 \
   --lr_g_max 5e-5 \
   --lr_g_min 1e-5 \
-  --warmup_steps_g 50 \
+  --warmup_steps_g 0 \
   --si_sdr_weight 1.0 \
   --mrstft_weight 0.5 \
   --complex_weight 0.0 \
@@ -402,6 +403,47 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --device cuda
 ```
 
+**断点续训**
+```
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb \
+  --resume \
+  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_007.pt \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --phase1_epochs 0 \
+  --phase2_epochs 10 \
+  --phase3_epochs 0 \
+  --batch_size 22 \
+  --num_workers 8 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 0 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.0 \
+  --use_campplus_train_loss \
+  --use_campplus_feat_loss \
+  --campplus_feat_layers block2,out_nonlinear \
+  --campplus_feat_loss_weight 1 \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 3 \
+  --no_use_spk_amsoftmax \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --device cuda
+```
+
+```
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_q25/best_generator_sv.pt \
+```
 Experiment C（按 实验phase3：从实验B最优checkpoint进入 phase3 轻量 GAN 微调）：
 
 ```bash
@@ -806,11 +848,11 @@ python my_methods_GAN/scripts/plot_train_avg_curve.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/train.log \
-  --phase phase3 \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/train.log \
+  --phase phase2 \
   --metrics spk_raw,spk_feat_raw \
-  --output_csv my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/epoch_phase3spk_trend.csv \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/epoch_phase3_spk_trend.png
+  --output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2spk_trend.csv \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2_spk_trend.png
 ```
 
 说明：
@@ -881,9 +923,9 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
 
 ```bash
 python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
-  --input_manifest my_methods_GAN/exp/sv_codec_restore/pair_manifest_all.csv \
-  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_q25.csv \
-  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_q25.csv \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore/pair_manifest_opus_amrwb_full.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
   --valid_ratio 0.1 \
   --train_fraction 0.25 \
   --valid_fraction 0.25 \
@@ -904,3 +946,164 @@ python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
   --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --strict
 ```
+
+## 9. 基于现有 clean_train_wav 生成 AMR-WB/G.711 全量数据（与 OPUS 对应 clean 一致）
+
+脚本：my_methods_GAN/scripts/transcode_clean_wav_to_codec.py
+
+先检查编码器：
+
+```bash
+ffmpeg -hide_banner -encoders | grep -E 'libvo_amrwbenc|pcm_mulaw|pcm_alaw'
+```
+
+示例：对现有 clean 目录全量生成 AMR-WB（15.85k，最接近 16k）
+
+```bash
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_amrwb_1585 \
+  --codec amrwb \
+  --bitrate 15.85k \
+  --sample_rate 16000 \
+  --workers 16
+```
+
+建议先生成 OPUS 全量（确保多 codec 与同一 clean 集合对齐）：
+
+```bash
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_opus_16k_full \
+  --codec opus \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --workers 16
+```
+
+示例：对同一 clean 全量生成 G.711 mu-law
+
+```bash
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_g711mulaw \
+  --codec g711_mulaw \
+  --sample_rate 16000 \
+  --workers 16
+```
+
+可选：G.711 A-law
+
+```bash
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_g711alaw \
+  --codec g711_alaw \
+  --sample_rate 16000 \
+  --workers 16
+```
+
+## 10. 构建 multi-codec manifest（OPUS + AMR-WB + G.711，全量）并切分
+
+```bash
+python my_methods_GAN/scripts/build_sv_codec_manifest.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_opus_16k_full \
+              my_methods_GAN/data/cnceleb_truepair/coded_train_amrwb_1585 \
+              my_methods_GAN/data/cnceleb_truepair/coded_train_g711mulaw \
+  --output_csv my_methods_GAN/exp/sv_codec_restore/pair_manifest_opus_amr_g711_full.csv
+```
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore/pair_manifest_opus_amr_g711_full.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amr_g711_full.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amr_g711_full.csv \
+  --valid_ratio 0.1 \
+  --seed 42
+```
+
+## 11. 继续实验 A / B（仅替换 manifest）
+
+实验 A（rec-only）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amr_g711_full.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amr_g711_full.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_g711_full \
+  --phase1_epochs 25 --phase2_epochs 0 --phase3_epochs 0 \
+  --batch_size 8 --num_workers 8
+```
+
+实验 B（teacher，warm-start from A）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amr_g711_full.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amr_g711_full.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_opus_amr_g711_full \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_g711_full/best_generator.pt \
+  --phase1_epochs 0 --phase2_epochs 8 --phase3_epochs 0 \
+  --use_campplus_train_loss \
+  --spk_loss_weight 3.0 \
+  --batch_size 8 --num_workers 8
+```
+
+## 12. 当前执行策略：仅 AMR-WB 训练（保留 G.711 逻辑，暂不启用）
+
+说明：
+- 当前只使用 `OPUS + AMR-WB` 进行训练。
+- `G.711` 相关转码与命令保留在上文，后续需要时可直接启用。
+
+构建仅 OPUS + AMR-WB 的 manifest：
+
+```bash
+python my_methods_GAN/scripts/build_sv_codec_manifest.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/clean_train_wav \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/coded_train_opus_16k \
+              my_methods_GAN/data/cnceleb_truepair/coded_train_amrwb_1585 \
+  --output_csv my_methods_GAN/exp/sv_codec_restore/pair_manifest_opus_amrwb_full.csv
+```
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore/pair_manifest_opus_amrwb_full.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_full.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_full.csv \
+  --valid_ratio 0.1 \
+  --seed 42
+```
+
+实验 A（rec-only，OPUS+AMR-WB）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_full.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_full.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amrwb_full \
+  --phase1_epochs 25 --phase2_epochs 0 --phase3_epochs 0 \
+  --batch_size 8 --num_workers 8
+```
+
+实验 B（teacher，warm-start from A，OPUS+AMR-WB）：
+
+```bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_full.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_full.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB_campplus_opus_amrwb_full \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amrwb_full/best_generator.pt \
+  --phase1_epochs 0 --phase2_epochs 8 --phase3_epochs 0 \
+  --use_campplus_train_loss \
+  --spk_loss_weight 3.0 \
+  --batch_size 8 --num_workers 8
+```
+
+## 13. 数据读取模式更新：展开样本（multi-codec -> multi-row）
+
+- 修改文件：`my_methods_GAN/sv_codec_restore_gan/data/dataset.py`
+- 当前训练读取方式：
+  - 若 manifest 某行 `codec_wav` 含多个路径（如 `opus|amrwb`），会在加载时展开为多条样本。
+  - 即同一个 `clean_wav` 会对应多条单 codec 样本（`clean+opus`、`clean+amrwb` 分别参与训练）。
+  - 不再是“同一行随机选一个 codec”模式。

@@ -25,6 +25,25 @@ def _infer_spk_id(rel_path: str) -> str:
     return parts[0] if parts else "unknown"
 
 
+def _infer_codec_type(path: Path) -> str:
+    name = path.name.lower()
+    if "amrwb" in name or "amr_wb" in name:
+        return "amrwb"
+    if "g711" in name and "mulaw" in name:
+        return "g711_mulaw"
+    if "g711" in name and "alaw" in name:
+        return "g711_alaw"
+    if "mulaw" in name:
+        return "g711_mulaw"
+    if "alaw" in name:
+        return "g711_alaw"
+    if "opus" in name:
+        return "opus"
+    if "aac" in name:
+        return "aac"
+    return name.replace(" ", "_")
+
+
 def _parse_coded_roots(coded_roots: str | Path | list[str] | tuple[str, ...]) -> list[Path]:
     if isinstance(coded_roots, (list, tuple)):
         raw_items = [str(x) for x in coded_roots]
@@ -49,13 +68,21 @@ def build_pair_manifest(clean_root: str | Path, coded_root: str | Path | list[st
 
     with output_csv.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["utt_id", "spk_id", "clean_wav", "codec_wav"])
+        writer.writerow(["utt_id", "spk_id", "clean_wav", "codec_wav", "codec_type"])
         for rel in rel_keys:
-            codec_paths = [str(idx[rel]) for idx in coded_indexes if rel in idx]
-            if not codec_paths:
-                continue
-            utt_id = Path(rel).with_suffix("").as_posix().replace("/", "-")
-            spk_id = _infer_spk_id(rel)
-            writer.writerow([utt_id, spk_id, str(clean_idx[rel]), "|".join(codec_paths)])
+            codec_pairs = []
+            for root, idx in zip(coded_roots, coded_indexes):
+                if rel in idx:
+                    codec_pairs.append((idx[rel], _infer_codec_type(root)))
 
-    return sum(1 for rel in rel_keys if any(rel in idx for idx in coded_indexes))
+            if not codec_pairs:
+                continue
+
+            utt_id_base = Path(rel).with_suffix("").as_posix().replace("/", "-")
+            spk_id = _infer_spk_id(rel)
+
+            for codec_path, codec_type in codec_pairs:
+                utt_id = f"{utt_id_base}_{codec_type}"
+                writer.writerow([utt_id, spk_id, str(clean_idx[rel]), str(codec_path), codec_type])
+
+    return sum(sum(1 for idx in coded_indexes if rel in idx) for rel in rel_keys)

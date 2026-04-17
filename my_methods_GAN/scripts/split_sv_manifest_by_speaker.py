@@ -68,6 +68,8 @@ def main():
     valid_rows = _sample_rows(valid_rows, args.valid_fraction, args.seed + 1, args.stratified)
 
     fields = ["utt_id", "spk_id", "clean_wav", "codec_wav"]
+    if rows and "codec_type" in rows[0]:
+        fields.append("codec_type")
 
     train_manifest = Path(args.train_manifest).resolve()
     valid_manifest = Path(args.valid_manifest).resolve()

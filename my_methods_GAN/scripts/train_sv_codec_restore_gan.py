@@ -201,6 +201,24 @@ def parse_args():
 
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
+    p.add_argument(
+        "--enable_codec_time_align",
+        action="store_true",
+        help="Apply codec-specific fixed time-shift alignment before crop/loss.",
+    )
+    p.add_argument(
+        "--disable_codec_time_align",
+        action="store_false",
+        dest="enable_codec_time_align",
+        help="Disable codec-specific fixed time-shift alignment.",
+    )
+    p.add_argument(
+        "--amrwb_shift_samples",
+        type=int,
+        default=95,
+        help="Fixed shift (samples at 16k) applied to AMR-WB coded audio. Positive means drop coded head.",
+    )
+    p.set_defaults(enable_codec_time_align=True)
     return p.parse_args()
 
 

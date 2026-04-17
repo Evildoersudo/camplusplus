@@ -124,3 +124,108 @@
 - 先用 A 获得稳定重建初始化，再做 B/B2 微调。
 - B2 中先关闭 AM-Softmax，待重建与 SV 指标稳定后再做增量 ablation。
 - 关注 epoch 级趋势而非 step 级抖动；必要时用 `plot_epoch_spk_trend.py` 观察 `spk_raw/spk_feat_raw` 的均值与方差。
+
+## 9. SC-GridRestore 整体框图与方法说明
+
+本节给出 SC-GridRestore 的整体框图、基本原理和执行过程，可直接用于实验报告或论文方法章节。
+
+### 9.1 整体框图（训练 + 推理）
+
+```mermaid
+flowchart TB
+    A["Codec语音 xcoded"] --> B["数据处理<br/>可选 codec 固定时移补偿<br/>长度对齐与裁剪"]
+    C["Clean语音 xclean"] --> B
+
+    B --> D["生成器 G<br/>STFT RI + CWS + TF GridNet + iSTFT<br/>残差恢复 xhat = xcoded + r"]
+    D --> E["恢复语音 xhat"]
+
+    subgraph T["训练分支"]
+      E --> F1["重建损失<br/>SI-SDR + MRSTFT + Complex-L1"]
+      C --> F1
+
+      E --> F2["CAMP++ 说话人一致性<br/>Embedding 余弦损失<br/>可选 Deep Feature L1<br/>可选 AM-Softmax"]
+      C --> F2
+
+      E --> F3["Phase3 对抗分支<br/>MRD STFT2D<br/>可选 MBD 多频带1D<br/>Adv + FM"]
+      C --> F3
+
+      E --> F4["可选 WavLM 蒸馏<br/>Frame 或 Embedding 一致性"]
+      C --> F4
+
+      F1 --> G1["总损失 Ltotal"]
+      F2 --> G1
+      F3 --> G1
+      F4 --> G1
+      G1 --> H["更新生成器 G"]
+      F3 --> I["更新判别器 D<br/>仅 phase3"]
+    end
+
+    subgraph P["推理分支"]
+      E --> J["输出增强语音<br/>用于 SV 特征提取与打分"]
+    end
+
+    K["三阶段训练策略<br/>phase1 重建<br/>phase2 重建加说话人约束<br/>phase3 重建加说话人加GAN可选WavLM"] --> T
+```
+
+### 9.2 基本原理
+
+SC-GridRestore 的目标是同时满足两类约束：
+
+- 声学恢复：让恢复语音尽可能接近 clean 语音（失真小、频谱细节好）。
+- 说话人保持：让恢复后说话人表征与 clean 保持一致（SV 友好）。
+
+可写为一个加权多目标优化：
+
+$$
+\hat{x}=G(x_{\text{coded}}),\quad
+\mathcal{L}_{\text{total}}=\mathcal{L}_{\text{rec}}+\lambda_{\text{spk}}\mathcal{L}_{\text{spk}}+\lambda_{\text{gan}}\mathcal{L}_{\text{adv}}+\lambda_{\text{fm}}\mathcal{L}_{\text{fm}}+\lambda_{\text{wavlm}}\mathcal{L}_{\text{wavlm}},\quad
+\min_G\,\mathcal{L}_{\text{total}}.
+$$
+
+其中：
+
+- $\mathcal{L}_{rec}$：重建损失（SI-SDR + MRSTFT + Complex-L1）。
+- $\mathcal{L}_{spk}$：说话人一致性损失（CAMP++ embedding/feature，及可选 AM-Softmax）。
+- $\mathcal{L}_{adv}, \mathcal{L}_{fm}$：对抗学习与特征匹配（phase3 启用）。
+- $\mathcal{L}_{wavlm}$：可选 WavLM 蒸馏项（phase3 可选）。
+
+### 9.3 执行过程（按训练/推理时序）
+
+1. 数据配对与预处理
+
+- 输入成对样本 $(x_{clean}, x_{coded})$。
+- 可选按 codec 类型施加固定时移补偿（如 AMR-WB）。
+- 做长度对齐后进行裁剪/补零，得到统一长度片段。
+
+2. 生成器前向恢复
+
+- 对 $x_{coded}$ 做 STFT，使用实部/虚部联合建模。
+- 通过 CWS 与 TF-GridNet block 在时频域提取上下文。
+- 经 iSTFT 回到波形，输出残差恢复结果：
+
+$$
+\hat{x} = x_{coded} + r
+$$
+
+3. 多损失联合优化（按 phase 开关）
+
+- phase1：仅重建损失，先学稳定去失真能力。
+- phase2：在重建基础上加入 speaker 一致性约束，提高身份保真。
+- phase3：在 phase2 基础上加入 GAN（和可选 WavLM），提升感知细节与自然度。
+
+4. 反向传播与参数更新
+
+- 每 step 更新生成器；phase3 中按配置更新判别器。
+- 记录 train/valid 的重建与 SV 指标，保存 best checkpoint。
+
+5. 推理执行
+
+- 推理时仅保留生成器 $G$。
+- 输入 coded 语音后输出 restored 语音，再进入 SV 嵌入提取与打分。
+
+### 9.4 方法要点总结
+
+- 结构层面：时频建模（GridNet）适合 codec 伪影恢复。
+- 目标层面：重建约束 + 身份约束共同优化，避免“听感变好但身份漂移”。
+- 训练层面：三阶段递进提高稳定性，降低直接对抗训练的不确定性。
+- 部署层面：推理仅需生成器，工程开销可控。
