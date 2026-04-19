@@ -10,8 +10,9 @@ def parse_args():
     p.add_argument("--trials_file", type=str, required=True)
     p.add_argument("--eval_clean_dir", type=str, required=True, help="Directory containing enroll/ and test/ wavs.")
     p.add_argument("--eval_coded_dir", type=str, required=True, help="Directory containing enroll/ and test/ wavs.")
-    p.add_argument("--clean_scp_out", type=str, required=True)
+    p.add_argument("--clean_scp_out", type=str, default="", help="Output clean wav.scp path. Required unless --skip_clean_scp is set.")
     p.add_argument("--coded_scp_out", type=str, required=True)
+    p.add_argument("--skip_clean_scp", action="store_true", help="Skip writing clean wav.scp; only write coded wav.scp.")
     p.add_argument("--strict", action="store_true", help="Fail if any trial utterance cannot be resolved.")
     return p.parse_args()
 
@@ -71,16 +72,23 @@ def main():
     trials_file = Path(args.trials_file).resolve()
     eval_clean_dir = Path(args.eval_clean_dir).resolve()
     eval_coded_dir = Path(args.eval_coded_dir).resolve()
-    clean_scp_out = Path(args.clean_scp_out).resolve()
+    clean_scp_out = Path(args.clean_scp_out).resolve() if args.clean_scp_out else None
     coded_scp_out = Path(args.coded_scp_out).resolve()
+
+    if not args.skip_clean_scp and clean_scp_out is None:
+        raise ValueError("--clean_scp_out is required unless --skip_clean_scp is set")
 
     keys = _parse_trials(trials_file)
     print(f"trial utterances: {len(keys)}")
 
-    _write_scp(keys, eval_clean_dir, clean_scp_out, args.strict)
+    if args.skip_clean_scp:
+        print("skip clean scp generation due to --skip_clean_scp")
+    else:
+        _write_scp(keys, eval_clean_dir, clean_scp_out, args.strict)
     _write_scp(keys, eval_coded_dir, coded_scp_out, args.strict)
 
-    print(f"saved clean scp: {clean_scp_out}")
+    if not args.skip_clean_scp:
+        print(f"saved clean scp: {clean_scp_out}")
     print(f"saved coded scp: {coded_scp_out}")
 
 

@@ -141,6 +141,8 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/sv_codec_restore_gan/models/losses.py
   - my_methods_GAN/scripts/train_sv_codec_restore_gan.py
   - my_methods_GAN/sv_codec_restore_gan/train/engine.py
+- 2026-04-18: 新增脚本并登记命令（多 codec 的 coded-only 批量评测：EER/minDCF）
+  - my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py
 
 ## 0. 环境准备
 
@@ -410,13 +412,14 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
   --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb \
   --resume \
-  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_007.pt \
+  --resume_use_current_phase_config \
+  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_010.pt \
   --emb_dim 48 \
   --num_blocks 5 \
   --hidden_units 100 \
   --attn_heads 4 \
   --phase1_epochs 0 \
-  --phase2_epochs 10 \
+  --phase2_epochs 20 \
   --phase3_epochs 0 \
   --batch_size 22 \
   --num_workers 8 \
@@ -648,27 +651,27 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
   --trial_sample_fraction 1.0 \
   --conditions clean,coded,restored \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/checkpoints/epoch_004.pt \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_010.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_third.json \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16k+amrwb1585_B_amrwb.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.1 \
-  --restore_chunk_batch_size 16 \
+  --restore_chunk_batch_size 128 \
   --restore_auto_shrink \
   --restore_min_chunk_seconds 1.0 \
   --restore_chunk_shrink_factor 0.7 \
   --use_cache \
   --cache_incremental \
-  --cache_save_every 500 \
+  --cache_save_every 100 \
   --plain_loader_batch_size 64 \
-  --plain_num_workers 4 \
-  --plain_camp_batch_size 32 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
-  --dump_speaker_npy_dir my_methods_GAN/exp/sv_codec_restore/run_main/speaker_emb_npy \
+  --plain_num_workers 8 \
+  --plain_camp_batch_size 64 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/amrwb/emb_cache \
+  --dump_speaker_npy_dir my_methods_GAN/exp/sv_codec_restore/run_main/amrwb/speaker_amrwb_emb_npy \
   --speaker_id_sep / \
   --speaker_id_field 0 \
   --device cuda
@@ -708,36 +711,35 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --trial_sample_fraction 0.2 \
   --conditions clean,coded \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_plain.json \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_opus16_clean_coded.json \
   --use_cache \
   --cache_incremental \
-  --cache_save_every 200 \
+  --cache_save_every 100 \
   --plain_loader_batch_size 64 \
   --plain_num_workers 4 \
   --plain_camp_batch_size 32 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/opus/emb_cache \
   --device cuda
 ```
 
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
   --conditions restored \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/checkpoints/epoch_010.pt \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_010.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results_restored_B_first.json \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_amrwb1585.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.1 \
   --restore_chunk_batch_size 32 \
   --use_cache \
   --cache_incremental \
   --cache_save_every 200 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/emb_cache \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/amrwb/emb_cache \
   --device cuda
 ```
 ```
@@ -783,9 +785,9 @@ python my_methods_GAN/scripts/eval_campplus_cnceleb.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_train_avg_curve.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/train.log \
+  --log_file my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/train.log \
   --sample_every 40 \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expC_phase3_from_B/avg_train_curve_s40.png
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/avg_train_curve_s40.png
 ```
 
 ## 3.3 下载并加载 WavLM-SV（HuggingFace）
@@ -859,6 +861,142 @@ python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
 
 - 输出 CSV 字段包含：`*_mean`、`*_std`、`*_min`、`*_max`。
 - 若环境安装了 `matplotlib`，会同时生成 PNG 趋势图（均值 + mean±std 阴影）。
+
+## 3.6 多 codec coded-only 批量评测（EER/minDCF）
+
+脚本：my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py
+
+一次命令评测 Opus、AMR-WB、AAC、G.711（coded-only）：
+
+```bash
+python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
+  --codec_scp opus16k=my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp,amrwb1585=my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp,aac32k=my_methods_GAN/exp/sv_codec_restore/eval_coded_aac32k.scp,g711mulaw=my_methods_GAN/exp/sv_codec_restore/eval_coded_g711mulaw.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/coded_only_4codec.json \
+  --use_cache \
+  --cache_incremental \
+  --cache_save_every 200 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/coded_only_4codec/emb_cache \
+  --plain_loader_batch_size 64 \
+  --plain_num_workers 8 \
+  --plain_camp_batch_size 64 \
+  --device cuda
+```
+
+不使用缓存（完全重算）：
+
+```bash
+python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
+  --codec_scp opus16k=my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp,amrwb1585=my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp,aac32k=my_methods_GAN/exp/sv_codec_restore/eval_coded_aac32k.scp,g711mulaw=my_methods_GAN/exp/sv_codec_restore/eval_coded_g711mulaw.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/coded_only_4codec_nocache.json \
+  --no_use_cache \
+  --plain_loader_batch_size 64 \
+  --plain_num_workers 8 \
+  --plain_camp_batch_size 64 \
+  --device cuda
+```
+
+说明：
+
+- `--codec_scp` 使用 `codec_tag=scp_path` 形式，多个条目用逗号分隔。
+- 输出 JSON 每项包含 `condition`、`num_trials`、`eer_percent`、`min_dcf`、`missing_utts`。
+- 若你尚未生成 `eval_coded_aac32k.scp` 或 `eval_coded_g711mulaw.scp`，请先用 `make_cnceleb_eval_scp.py` 生成对应 scp。
+
+## 3.7 一键流水线：从 eval_clean 到四 codec coded-only 评测
+
+适用场景：还没有完整的 AAC/G.711 eval coded 数据与 scp。
+
+### 第一步：由 eval_clean 生成四种 codec 的 eval coded wav
+
+```bash
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/eval_coded_opus_16k \
+  --codec opus \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --workers 16
+
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/eval_coded_amrwb_1585 \
+  --codec amrwb \
+  --bitrate 15.85k \
+  --sample_rate 16000 \
+  --workers 16
+
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/eval_coded_aac_32k \
+  --codec aac \
+  --bitrate 32k \
+  --sample_rate 16000 \
+  --workers 16
+
+python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
+  --clean_root my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --coded_root my_methods_GAN/data/cnceleb_truepair/eval_coded_g711mulaw \
+  --codec g711_mulaw \
+  --sample_rate 16000 \
+  --workers 16
+```
+
+### 第二步：生成四种 codec 的 eval scp（复用已有 clean scp）
+
+```bash
+python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_opus_16k \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --skip_clean_scp \
+  --strict
+
+python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_amrwb_1585 \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
+  --skip_clean_scp \
+  --strict
+
+python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_aac_32k \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_aac32k.scp \
+  --skip_clean_scp \
+  --strict
+
+python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
+  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_g711mulaw \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_g711mulaw.scp \
+  --skip_clean_scp \
+  --strict
+```
+
+### 第三步：批量计算四 codec 的 coded-only EER/minDCF
+
+```bash
+python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
+  --codec_scp opus16k=my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp,amrwb1585=my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp,aac32k=my_methods_GAN/exp/sv_codec_restore/eval_coded_aac32k.scp,g711mulaw=my_methods_GAN/exp/sv_codec_restore/eval_coded_g711mulaw.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/coded_only_4codec.json \
+  --use_cache \
+  --cache_incremental \
+  --cache_save_every 200 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/coded_only_4codec/emb_cache \
+  --plain_loader_batch_size 64 \
+  --plain_num_workers 8 \
+  --plain_camp_batch_size 64 \
+  --device cuda
+```
 
 ## 4. 模块入口说明（非直接脚本）
 
@@ -941,9 +1079,10 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
 python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
   --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
-  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_opus_16k \
+  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_amrwb_1585 \
   --clean_scp_out my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
-  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
+  --skip_clean_scp \
   --strict
 ```
 

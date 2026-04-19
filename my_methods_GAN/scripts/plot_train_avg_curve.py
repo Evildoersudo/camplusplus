@@ -15,10 +15,6 @@ KV_RE = re.compile(r"(?P<k>[A-Za-z_][A-Za-z0-9_]*)=(?P<v>[0-9eE+\-.]+)")
 
 DEFAULT_METRICS = [
     "avg_train",
-    "rec_total",
-    "spk_weighted",
-    "spk_cls_weighted",
-    "generator_grad_norm",
     "si_sdr",
     "mrstft",
     "complex",
