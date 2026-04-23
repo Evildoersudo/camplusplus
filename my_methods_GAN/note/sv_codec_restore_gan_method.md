@@ -146,18 +146,10 @@ flowchart TB
       E --> F2["CAMP++ 说话人一致性<br/>Embedding 余弦损失<br/>可选 Deep Feature L1<br/>可选 AM-Softmax"]
       C --> F2
 
-      E --> F3["Phase3 对抗分支<br/>MRD STFT2D<br/>可选 MBD 多频带1D<br/>Adv + FM"]
-      C --> F3
-
-      E --> F4["可选 WavLM 蒸馏<br/>Frame 或 Embedding 一致性"]
-      C --> F4
 
       F1 --> G1["总损失 Ltotal"]
       F2 --> G1
-      F3 --> G1
-      F4 --> G1
       G1 --> H["更新生成器 G"]
-      F3 --> I["更新判别器 D<br/>仅 phase3"]
     end
 
     subgraph P["推理分支"]

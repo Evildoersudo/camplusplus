@@ -49,6 +49,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--trials_file", type=str, required=True)
     p.add_argument("--campplus_ckpt", type=str, required=True)
     p.add_argument("--output_json", type=str, required=True)
+    p.add_argument(
+        "--output_png",
+        type=str,
+        default="",
+        help="Optional summary figure path. Default: <output_json_stem>.png",
+    )
 
     p.add_argument("--trial_sample_fraction", type=float, default=1.0)
     p.add_argument("--trial_sample_total", type=int, default=0)
@@ -75,7 +81,53 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--speaker_id_field", type=int, default=0)
 
     p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
+    p.add_argument("--plot_title_fontsize", type=int, default=18)
+    p.add_argument("--plot_label_fontsize", type=int, default=15)
+    p.add_argument("--plot_tick_fontsize", type=int, default=13)
+    p.add_argument("--plot_legend_fontsize", type=int, default=13)
     return p.parse_args()
+
+
+def maybe_plot_summary(results: list[dict], output_png: Path, args: argparse.Namespace) -> None:
+    if not results:
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        print("matplotlib not found, skip png plotting. Install matplotlib to enable plotting.")
+        return
+
+    conditions = [str(r.get("condition", "")) for r in results]
+    eers = [float(r.get("eer_percent", 0.0)) for r in results]
+    min_dcfs = [float(r.get("min_dcf", 0.0)) for r in results]
+
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(13.0, 5.0), squeeze=False)
+    ax0 = axes[0][0]
+    ax1 = axes[0][1]
+    xs = list(range(len(conditions)))
+
+    ax0.bar(xs, eers, color="#1f77b4", alpha=0.9, label="EER(%)")
+    ax0.set_xticks(xs)
+    ax0.set_xticklabels(conditions, rotation=20, ha="right")
+    ax0.set_ylabel("EER (%)", fontsize=args.plot_label_fontsize)
+    ax0.grid(axis="y", linestyle="--", alpha=0.35)
+    ax0.legend(loc="best", fontsize=args.plot_legend_fontsize)
+    ax0.tick_params(axis="both", labelsize=args.plot_tick_fontsize)
+
+    ax1.bar(xs, min_dcfs, color="#d62728", alpha=0.9, label="minDCF")
+    ax1.set_xticks(xs)
+    ax1.set_xticklabels(conditions, rotation=20, ha="right")
+    ax1.set_ylabel("minDCF", fontsize=args.plot_label_fontsize)
+    ax1.grid(axis="y", linestyle="--", alpha=0.35)
+    ax1.legend(loc="best", fontsize=args.plot_legend_fontsize)
+    ax1.tick_params(axis="both", labelsize=args.plot_tick_fontsize)
+
+    fig.suptitle("Coded-Only Multi-Codec SV Metrics", fontsize=args.plot_title_fontsize)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_png, dpi=180)
+    print(f"Saved plot: {output_png}")
 
 
 def main() -> None:
@@ -162,6 +214,9 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Saved: {out_path}")
+
+    output_png = Path(args.output_png).resolve() if args.output_png else out_path.with_suffix(".png")
+    maybe_plot_summary(results, output_png, args)
 
 
 if __name__ == "__main__":

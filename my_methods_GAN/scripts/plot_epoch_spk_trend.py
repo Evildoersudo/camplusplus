@@ -11,6 +11,12 @@ from pathlib import Path
 
 STEP_LINE_RE = re.compile(r"\[epoch\s+(?P<epoch>\d+)\]\[(?P<phase>[^\]]+)\]\s+step\s+")
 KV_RE = re.compile(r"(?P<k>[A-Za-z_][A-Za-z0-9_]*)=(?P<v>[0-9eE+\-.]+)")
+EPOCH_SUMMARY_RE = re.compile(r"\[epoch\s+(?P<epoch>\d+)\]\s+phase=(?P<phase>\S+)")
+
+TITLE_FONTSIZE = 18
+LABEL_FONTSIZE = 20
+TICK_FONTSIZE = 13
+LEGEND_FONTSIZE = 13
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,6 +55,25 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional merged csv path for report trend mode.",
     )
+    p.add_argument(
+        "--epoch_range",
+        type=str,
+        default="",
+        help="Epoch range to plot, e.g. 1-10 or 1,3,5-8. Empty means all.",
+    )
+    p.add_argument(
+        "--valid_sv_source",
+        type=str,
+        default="summary_json",
+        choices=["summary_json", "train_log"],
+        help="Source of valid_sv_cos in report trend mode.",
+    )
+    p.add_argument(
+        "--valid_sv_log_file",
+        type=str,
+        default="",
+        help="Path to train.log for valid_sv_cos when --valid_sv_source=train_log.",
+    )
     return p.parse_args()
 
 
@@ -61,28 +86,121 @@ def _calc_mean_std(values: list[float]) -> tuple[float, float]:
     return mean, math.sqrt(max(var, 0.0))
 
 
-def _load_valid_sv_cos(summary_json: Path) -> dict[int, tuple[float, float]]:
+def _parse_epoch_range(text: str) -> set[int] | None:
+    s = text.strip()
+    if not s:
+        return None
+    out: set[int] = set()
+    for token in s.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            a_str, b_str = token.split("-", 1)
+            a = int(a_str.strip())
+            b = int(b_str.strip())
+            if a <= 0 or b <= 0:
+                raise ValueError("epoch_range must be positive integers")
+            lo, hi = (a, b) if a <= b else (b, a)
+            out.update(range(lo, hi + 1))
+        else:
+            v = int(token)
+            if v <= 0:
+                raise ValueError("epoch_range must be positive integers")
+            out.add(v)
+    if not out:
+        raise ValueError("epoch_range parsed as empty set")
+    return out
+
+
+def _apply_epoch_filter(epochs: list[int], epoch_filter: set[int] | None) -> list[int]:
+    if epoch_filter is None:
+        return epochs
+    return [e for e in epochs if e in epoch_filter]
+
+
+def _load_valid_metrics_from_summary(
+    summary_json: Path,
+    phase_filter: str = "",
+) -> tuple[dict[int, tuple[float, float]], dict[int, tuple[float, float]]]:
     with summary_json.open("r", encoding="utf-8") as f:
         payload = json.load(f)
 
     history = payload.get("history", [])
-    out: dict[int, tuple[float, float]] = {}
+    valid_sv_out: dict[int, tuple[float, float]] = {}
+    valid_rec_out: dict[int, tuple[float, float]] = {}
     for row in history:
         if not isinstance(row, dict):
             continue
-        if "epoch" not in row or "valid_sv_cos" not in row:
+        if "epoch" not in row:
+            continue
+        row_phase = str(row.get("phase", "")).strip()
+        if phase_filter and row_phase and row_phase != phase_filter:
             continue
         epoch = int(row["epoch"])
-        mean = float(row["valid_sv_cos"])
-        # train_summary.json usually has epoch-level scalar valid_sv_cos only.
-        # If *_std key exists, use it; otherwise fallback to 0 for plotting.
-        std = float(
-            row.get(
-                "valid_sv_cos_std",
-                row.get("valid_sv_std", row.get("sv_cos_std", 0.0)),
+        if "valid_sv_cos" in row:
+            sv_mean = float(row["valid_sv_cos"])
+            # train_summary.json usually has epoch-level scalar valid_sv_cos only.
+            # If *_std key exists, use it; otherwise fallback to 0 for plotting.
+            sv_std = float(
+                row.get(
+                    "valid_sv_cos_std",
+                    row.get("valid_sv_std", row.get("sv_cos_std", 0.0)),
+                )
             )
-        )
-        out[epoch] = (mean, std)
+            valid_sv_out[epoch] = (sv_mean, sv_std)
+        if "valid_rec_loss" in row:
+            rec_mean = float(row["valid_rec_loss"])
+            rec_std = float(
+                row.get(
+                    "valid_rec_loss_std",
+                    row.get("valid_rec_std", row.get("valid_loss_std", 0.0)),
+                )
+            )
+            valid_rec_out[epoch] = (rec_mean, rec_std)
+    return valid_sv_out, valid_rec_out
+
+
+def _load_valid_sv_cos_from_log(log_file: Path, phase_filter: str = "") -> dict[int, tuple[float, float]]:
+    out: dict[int, tuple[float, float]] = {}
+    with log_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            m = EPOCH_SUMMARY_RE.search(line)
+            if not m:
+                continue
+            phase = m.group("phase")
+            if phase_filter and phase != phase_filter:
+                continue
+            kvs = {k: float(v) for k, v in KV_RE.findall(line)}
+            if "sv_cos" not in kvs and "valid_sv_cos" not in kvs:
+                continue
+            epoch = int(m.group("epoch"))
+            sv = float(kvs.get("sv_cos", kvs.get("valid_sv_cos", 0.0)))
+            out[epoch] = (sv, 0.0)
+    return out
+
+
+def _load_valid_rec_loss_from_log(log_file: Path, phase_filter: str = "") -> dict[int, tuple[float, float]]:
+    out: dict[int, tuple[float, float]] = {}
+    with log_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            m = EPOCH_SUMMARY_RE.search(line)
+            if not m:
+                continue
+            phase = m.group("phase")
+            if phase_filter and phase != phase_filter:
+                continue
+            kvs = {k: float(v) for k, v in KV_RE.findall(line)}
+            if "valid_rec" in kvs:
+                rec = float(kvs["valid_rec"])
+            elif "valid_rec_loss" in kvs:
+                rec = float(kvs["valid_rec_loss"])
+            elif "valid_loss" in kvs:
+                rec = float(kvs["valid_loss"])
+            else:
+                continue
+            epoch = int(m.group("epoch"))
+            out[epoch] = (rec, 0.0)
     return out
 
 
@@ -101,38 +219,58 @@ def _load_spk_means(trend_csv: Path) -> dict[int, tuple[float, float, float, flo
 
 
 def run_report_trend_mode(args: argparse.Namespace) -> None:
+    epoch_filter = _parse_epoch_range(args.epoch_range)
     summary_json = Path(args.summary_json).resolve() if args.summary_json else Path(
         "my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/train_summary.json"
     ).resolve()
     trend_csv = Path(args.trend_csv).resolve() if args.trend_csv else Path(
         "my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.csv"
     ).resolve()
+    valid_sv_log = Path(args.valid_sv_log_file).resolve() if args.valid_sv_log_file else (trend_csv.parent / "train.log")
 
-    if not summary_json.is_file():
-        raise FileNotFoundError(f"summary_json not found: {summary_json}")
     if not trend_csv.is_file():
         raise FileNotFoundError(f"trend_csv not found: {trend_csv}")
+    if args.valid_sv_source == "summary_json":
+        if not summary_json.is_file():
+            raise FileNotFoundError(f"summary_json not found: {summary_json}")
+    else:
+        if not valid_sv_log.is_file():
+            raise FileNotFoundError(f"valid_sv_log_file not found: {valid_sv_log}")
 
-    valid_sv_by_epoch = _load_valid_sv_cos(summary_json)
+    if args.valid_sv_source == "summary_json":
+        valid_sv_by_epoch, valid_rec_by_epoch = _load_valid_metrics_from_summary(summary_json, phase_filter=args.phase)
+    else:
+        valid_sv_by_epoch = _load_valid_sv_cos_from_log(valid_sv_log, phase_filter=args.phase)
+        valid_rec_by_epoch = _load_valid_rec_loss_from_log(valid_sv_log, phase_filter=args.phase)
     spk_means_by_epoch = _load_spk_means(trend_csv)
     if not valid_sv_by_epoch:
-        raise RuntimeError(f"No valid_sv_cos found in: {summary_json}")
+        if args.valid_sv_source == "summary_json":
+            raise RuntimeError(f"No valid_sv_cos found in: {summary_json}")
+        raise RuntimeError(f"No sv_cos found in: {valid_sv_log}")
+    if not valid_rec_by_epoch:
+        if args.valid_sv_source == "summary_json":
+            raise RuntimeError(f"No valid_rec_loss found in: {summary_json}")
+        raise RuntimeError(f"No valid_rec/valid_rec_loss found in: {valid_sv_log}")
     if not spk_means_by_epoch:
         raise RuntimeError(f"No speaker means found in: {trend_csv}")
 
-    epochs = sorted(set(valid_sv_by_epoch.keys()) & set(spk_means_by_epoch.keys()))
+    epochs = sorted(set(valid_sv_by_epoch.keys()) & set(valid_rec_by_epoch.keys()) & set(spk_means_by_epoch.keys()))
+    epochs = _apply_epoch_filter(epochs, epoch_filter)
     if not epochs:
-        raise RuntimeError("No overlapped epochs between summary_json and trend_csv")
+        raise RuntimeError("No overlapped epochs after applying source/range filter")
 
     merged_rows: list[dict[str, float | int]] = []
     valid_sv_has_nonzero_std = False
     for epoch in epochs:
+        valid_rec_mean, valid_rec_std = valid_rec_by_epoch[epoch]
         valid_sv_mean, valid_sv_std = valid_sv_by_epoch[epoch]
         spk_raw_mean, spk_raw_std, spk_feat_raw_mean, spk_feat_raw_std = spk_means_by_epoch[epoch]
         valid_sv_has_nonzero_std = valid_sv_has_nonzero_std or (valid_sv_std > 0.0)
         merged_rows.append(
             {
                 "epoch": epoch,
+                "valid_rec_loss": valid_rec_mean,
+                "valid_rec_loss_std": valid_rec_std,
                 "valid_sv_cos": valid_sv_mean,
                 "valid_sv_cos_std": valid_sv_std,
                 "spk_raw_mean": spk_raw_mean,
@@ -151,6 +289,8 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
             f,
             fieldnames=[
                 "epoch",
+                "valid_rec_loss",
+                "valid_rec_loss_std",
                 "valid_sv_cos",
                 "valid_sv_cos_std",
                 "spk_raw_mean",
@@ -164,7 +304,7 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
             writer.writerow(row)
     print(f"saved merged csv: {merged_csv}")
     if not valid_sv_has_nonzero_std:
-        print("warning: valid_sv_cos std not found in summary_json; using 0.0 as fallback")
+        print("warning: valid_sv_cos std not found in source; using 0.0 as fallback")
 
     try:
         import matplotlib.pyplot as plt
@@ -172,6 +312,7 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
         print("matplotlib not found, skip png plotting. Install matplotlib to enable plotting.")
         return
 
+    valid_rec = [float(r["valid_rec_loss"]) for r in merged_rows]
     valid_sv = [float(r["valid_sv_cos"]) for r in merged_rows]
     valid_sv_std = [float(r["valid_sv_cos_std"]) for r in merged_rows]
     spk_raw = [float(r["spk_raw_mean"]) for r in merged_rows]
@@ -179,13 +320,20 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
     spk_feat = [float(r["spk_feat_raw_mean"]) for r in merged_rows]
     spk_feat_std = [float(r["spk_feat_raw_std"]) for r in merged_rows]
 
-    fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(8.5, 9.0), sharex=True, squeeze=False)
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12.0, 8.0), sharex=True, squeeze=False)
     ax0 = axes[0][0]
-    ax1 = axes[1][0]
-    ax2 = axes[2][0]
+    ax1 = axes[0][1]
+    ax2 = axes[1][0]
+    ax3 = axes[1][1]
 
-    ax0.plot(epochs, valid_sv, marker="o", linewidth=1.8, color="#1f77b4", label="valid_sv_cos mean")
-    ax0.fill_between(
+    ax0.plot(epochs, valid_rec, marker="o", linewidth=1.8, color="#9467bd", label="valid_rec")
+    ax0.set_ylabel("valid_rec", fontsize=LABEL_FONTSIZE)
+    ax0.grid(True, linestyle="--", alpha=0.35)
+    ax0.legend(loc="best", fontsize=LEGEND_FONTSIZE)
+    ax0.tick_params(axis="both", labelsize=TICK_FONTSIZE)
+
+    ax1.plot(epochs, valid_sv, marker="o", linewidth=1.8, color="#1f77b4", label="valid_sv_cos mean")
+    ax1.fill_between(
         epochs,
         [m - s for m, s in zip(valid_sv, valid_sv_std)],
         [m + s for m, s in zip(valid_sv, valid_sv_std)],
@@ -193,12 +341,13 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
         color="#1f77b4",
         label="mean±std",
     )
-    ax0.set_ylabel("valid_sv_cos")
-    ax0.grid(True, linestyle="--", alpha=0.35)
-    ax0.legend(loc="best")
+    ax1.set_ylabel("valid_sv_cos", fontsize=LABEL_FONTSIZE)
+    ax1.grid(True, linestyle="--", alpha=0.35)
+    ax1.legend(loc="best", fontsize=LEGEND_FONTSIZE)
+    ax1.tick_params(axis="both", labelsize=TICK_FONTSIZE)
 
-    ax1.plot(epochs, spk_raw, marker="o", linewidth=1.6, color="#d62728", label="spk_raw_mean")
-    ax1.fill_between(
+    ax2.plot(epochs, spk_raw, marker="o", linewidth=1.6, color="#d62728", label="spk_raw_mean")
+    ax2.fill_between(
         epochs,
         [m - s for m, s in zip(spk_raw, spk_raw_std)],
         [m + s for m, s in zip(spk_raw, spk_raw_std)],
@@ -206,12 +355,14 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
         color="#d62728",
         label="mean±std",
     )
-    ax1.set_ylabel("spk_raw")
-    ax1.grid(True, linestyle="--", alpha=0.35)
-    ax1.legend(loc="best")
+    ax2.set_xlabel("Epoch", fontsize=LABEL_FONTSIZE)
+    ax2.set_ylabel("spk_raw", fontsize=LABEL_FONTSIZE)
+    ax2.grid(True, linestyle="--", alpha=0.35)
+    ax2.legend(loc="best", fontsize=LEGEND_FONTSIZE)
+    ax2.tick_params(axis="both", labelsize=TICK_FONTSIZE)
 
-    ax2.plot(epochs, spk_feat, marker="o", linewidth=1.6, color="#2ca02c", label="spk_feat_raw_mean")
-    ax2.fill_between(
+    ax3.plot(epochs, spk_feat, marker="o", linewidth=1.6, color="#2ca02c", label="spk_feat_raw_mean")
+    ax3.fill_between(
         epochs,
         [m - s for m, s in zip(spk_feat, spk_feat_std)],
         [m + s for m, s in zip(spk_feat, spk_feat_std)],
@@ -219,14 +370,15 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
         color="#2ca02c",
         label="mean±std",
     )
-    ax2.set_xlabel("Epoch")
-    ax2.set_ylabel("spk_feat_raw")
-    ax2.grid(True, linestyle="--", alpha=0.35)
-    ax2.legend(loc="best")
+    ax3.set_xlabel("Epoch", fontsize=LABEL_FONTSIZE)
+    ax3.set_ylabel("spk_feat_raw", fontsize=LABEL_FONTSIZE)
+    ax3.grid(True, linestyle="--", alpha=0.35)
+    ax3.legend(loc="best", fontsize=LEGEND_FONTSIZE)
+    ax3.tick_params(axis="both", labelsize=TICK_FONTSIZE)
 
     title = args.title if args.title else "Validation SV and Speaker Loss Trend"
-    fig.suptitle(title)
-    plt.tight_layout()
+    fig.suptitle(title, fontsize=TITLE_FONTSIZE)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_png, dpi=180)
@@ -235,6 +387,7 @@ def run_report_trend_mode(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parse_args()
+    epoch_filter = _parse_epoch_range(args.epoch_range)
 
     if args.plot_report_trend:
         run_report_trend_mode(args)
@@ -273,6 +426,9 @@ def main() -> None:
         raise RuntimeError(f"No step lines found for phase '{args.phase}' with metrics: {','.join(metrics)}")
 
     epochs = sorted(per_epoch.keys())
+    epochs = _apply_epoch_filter(epochs, epoch_filter)
+    if not epochs:
+        raise RuntimeError("No epochs left after applying --epoch_range filter")
     rows: list[dict[str, float | int]] = []
     for epoch in epochs:
         row: dict[str, float | int] = {"epoch": epoch, "count": len(per_epoch[epoch][metrics[0]])}
@@ -324,13 +480,14 @@ def main() -> None:
 
         ax.plot(epochs, ys, marker="o", linewidth=1.4, label=f"{metric} mean")
         ax.fill_between(epochs, ylow, yhigh, alpha=0.20, label="mean±std")
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel(metric)
+        ax.set_xlabel("Epoch", fontsize=LABEL_FONTSIZE)
+        ax.set_ylabel(metric, fontsize=LABEL_FONTSIZE)
         ax.grid(True, linestyle="--", alpha=0.35)
-        ax.legend()
+        ax.legend(fontsize=LEGEND_FONTSIZE)
+        ax.tick_params(axis="both", labelsize=TICK_FONTSIZE)
 
-    fig.suptitle(f"{args.title} ({args.phase})")
-    plt.tight_layout()
+    fig.suptitle(f"{args.title} ({args.phase})", fontsize=TITLE_FONTSIZE)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_png, dpi=160)

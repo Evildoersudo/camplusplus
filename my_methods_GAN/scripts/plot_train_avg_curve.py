@@ -20,6 +20,10 @@ DEFAULT_METRICS = [
     "complex",
 ]
 
+TITLE_FONTSIZE = 18
+LABEL_FONTSIZE = 15
+TICK_FONTSIZE = 13
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Plot training metric curves from train.log with step subsampling.")
@@ -82,15 +86,16 @@ def main() -> None:
     for i, metric in enumerate(metrics):
         ax = flat_axes[i]
         ax.plot(xs, values[metric], linewidth=1.2)
-        ax.set_xlabel("Parsed step index")
-        ax.set_ylabel(metric)
+        ax.set_xlabel("Parsed step index", fontsize=LABEL_FONTSIZE)
+        ax.set_ylabel(metric, fontsize=LABEL_FONTSIZE)
+        ax.tick_params(axis="both", labelsize=TICK_FONTSIZE)
         ax.grid(True, linestyle="--", alpha=0.35)
 
     for j in range(n, len(flat_axes)):
         flat_axes[j].axis("off")
 
-    fig.suptitle(args.title + f" (sample_every={sample_every})")
-    plt.tight_layout()
+    fig.suptitle(args.title + f" (sample_every={sample_every})", fontsize=TITLE_FONTSIZE)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_png, dpi=160)

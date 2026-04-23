@@ -143,6 +143,20 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - my_methods_GAN/sv_codec_restore_gan/train/engine.py
 - 2026-04-18: 新增脚本并登记命令（多 codec 的 coded-only 批量评测：EER/minDCF）
   - my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py
+- 2026-04-19: 修改脚本并更新命令（plot_epoch_spk_trend 新增报告模式：三子图 + mean±std 阴影）
+  - my_methods_GAN/scripts/plot_epoch_spk_trend.py
+- 2026-04-20: 修改脚本并更新命令（Experiment A 客观质量评测加速：低频GC + STOI/PESQ多进程 + 推理chunk批量前向）
+  - my_methods_GAN/scripts/eval_objective_quality_experiment_a.py
+- 2026-04-20: 新增脚本并登记命令（Experiment A 客观语音质量评测：coded vs restored）
+  - my_methods_GAN/scripts/eval_objective_quality_experiment_a.py
+- 2026-04-20: 修改脚本并更新命令（Experiment A 评测新增进度打印、速度与 ETA）
+  - my_methods_GAN/scripts/eval_objective_quality_experiment_a.py
+- 2026-04-20: 修改脚本（修复分块 STFT 指标在短语音上的 padding 报错，自动跳过短块并回退到补零整句计算）
+  - my_methods_GAN/scripts/eval_objective_quality_experiment_a.py
+- 2026-04-22: 新增脚本并登记命令（绘制 clean 与 coded AMR-WB 时频图对比，大字号）
+  - my_methods_GAN/scripts/plot_clean_coded_spectrogram.py
+- 2026-04-22: 新增脚本并登记命令（coded 输入模型输出 restored，并绘制 clean/coded/restored 三联时频图）
+  - my_methods_GAN/scripts/plot_clean_coded_restored_spectrogram.py
 
 ## 0. 环境准备
 
@@ -413,13 +427,13 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb \
   --resume \
   --resume_use_current_phase_config \
-  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_010.pt \
+  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_020.pt \
   --emb_dim 48 \
   --num_blocks 5 \
   --hidden_units 100 \
   --attn_heads 4 \
   --phase1_epochs 0 \
-  --phase2_epochs 20 \
+  --phase2_epochs 40 \
   --phase3_epochs 0 \
   --batch_size 22 \
   --num_workers 8 \
@@ -730,9 +744,9 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
   --conditions restored \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_010.pt \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_020.pt \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_amrwb1585.json \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_amrwb_plus.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.1 \
   --restore_chunk_batch_size 32 \
@@ -861,6 +875,58 @@ python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
 
 - 输出 CSV 字段包含：`*_mean`、`*_std`、`*_min`、`*_max`。
 - 若环境安装了 `matplotlib`，会同时生成 PNG 趋势图（均值 + mean±std 阴影）。
+
+中期报告模式（从 `train_summary.json` + `epoch_phase2_spk_trend.csv` 读取 3 条曲线）：
+
+```bash
+python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
+  --plot_report_trend \
+  --summary_json my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/train_summary.json \
+  --trend_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.csv \
+  --report_output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_validsv_spk_trend.csv \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_validsv_spk_trend.png \
+  --title "ExpB2 Phase2 Validation SV and Speaker-Loss Trend"
+```
+
+说明：
+
+- 报告模式输出 3 个子图：`valid_sv_cos`、`spk_raw_mean`、`spk_feat_raw_mean`。
+- 每个子图都绘制 `mean±std` 阴影；`spk_*` 的 std 来自 `epoch_phase2_spk_trend.csv`。
+- 若 `train_summary.json` 无 `valid_sv_cos` 的 std 字段，会自动回退为 `0.0` 并打印 warning。
+
+可选参数补充：
+
+- `--epoch_range`：只绘制指定 epoch（例如 `1-10` 或 `1,3,5-8`）。
+- `--valid_sv_source`：`summary_json` 或 `train_log`，用于控制 `valid_sv_cos` 来源。
+- `--valid_sv_log_file`：当 `--valid_sv_source train_log` 时指定日志路径（默认尝试 `trend_csv` 同目录下的 `train.log`）。
+
+示例 1（只画 epoch 1-10，`valid_sv_cos` 来自 train_summary.json）：
+
+```bash
+python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
+  --plot_report_trend \
+  --phase phase2 \
+  --valid_sv_source summary_json \
+  --summary_json my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/train_summary.json \
+  --trend_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_spk_trend.csv \
+  --epoch_range 1-10 \
+  --report_output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_validsv_spk_trend_ep1_10.csv \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_3/epoch_phase2_validsv_spk_trend_ep1_10.png
+```
+
+示例 2（断点续训场景，`valid_sv_cos` 改从 train.log 读取）：
+
+```bash
+python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
+  --plot_report_trend \
+  --phase phase2 \
+  --valid_sv_source train_log \
+  --valid_sv_log_file my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/train.log \
+  --trend_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2_spk_trend.csv \
+  --epoch_range 1-20 \
+  --report_output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2_validsv_spk_trend_fromlog_ep1_10.csv \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2_validsv_spk_trend_fromlog_ep1_10.png
+```
 
 ## 3.6 多 codec coded-only 批量评测（EER/minDCF）
 
@@ -1246,3 +1312,207 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   - 若 manifest 某行 `codec_wav` 含多个路径（如 `opus|amrwb`），会在加载时展开为多条样本。
   - 即同一个 `clean_wav` 会对应多条单 codec 样本（`clean+opus`、`clean+amrwb` 分别参与训练）。
   - 不再是“同一行随机选一个 codec”模式。
+
+## 14. Experiment A 客观语音质量评测（coded vs restored）
+
+脚本：`my_methods_GAN/scripts/eval_objective_quality_experiment_a.py`
+
+说明：
+- 输入可选两种模式：`manifest_csv`（需包含 `clean_wav` / `codec_wav` 列）或 `clean_wav_scp + coded_wav_scp`，并加载 Experiment A 的 `best_generator.pt`。
+- 同时输出 `coded->clean` 与 `restored->clean` 的客观指标均值。
+- 输出 JSON 含 `overall` 与 `by_codec` 两级统计，便于直接写报告。
+- 默认指标（无需额外安装）：`si_sdr_db,snr_db,l1,mse,mrstft,complex_l1`
+- 可选指标：`stoi`（需 `pystoi`）、`pesq_wb`（需 `pesq`）
+- 中期正式结论建议使用 `eval` 集（`eval_clean.scp` + `eval_coded_*.scp`），不建议用 `valid` 集做最终报告。
+- 分块参数（用于防 OOM）：
+  - `--infer_chunk_seconds`：生成器推理分块长度（秒）。例如 `4` 表示每次只前向 4 秒语音。
+  - `--infer_hop_seconds`：生成器推理分块步长（秒）。`4/4` 表示无重叠；如 `4/2` 表示 50% 重叠融合。
+  - `--metric_chunk_seconds`：`mrstft/complex_l1` 等 STFT 指标的分块长度（秒）。
+  - `--metric_hop_seconds`：STFT 指标分块步长（秒）。
+  - 建议：先用 `4/4`；若仍 OOM 改为 `2/2`；若追求更平滑可用 `4/2`（但更慢）。
+- 本次新增加速参数：
+  - `--infer_chunk_batch_size`：推理分块批量前向大小（默认 8，显存足够可适当增大）。
+  - `--mp_metric_workers`：STOI/PESQ 多进程 worker 数（`>0` 开启并行，`0` 关闭）。
+  - `--mp_metric_prefetch`：STOI/PESQ 异步队列深度（默认 32，建议 16~64）。
+  - `--mp_metric_start_method`：多进程启动方式（推荐 `spawn`，CUDA 场景更稳）。
+  - `--mp_metric_max_tasks_per_child`：每个 worker 处理 N 个任务后重建（默认 200，降低原生库长跑崩溃概率）。
+  - `--gc_collect_every`：低频 `gc.collect()` 间隔（默认 `0` 关闭，建议仅在内存压力大时启用）。
+- 新增“两阶段缓存评测”参数：
+  - `--restored_cache_dir`：restored wav 缓存目录。
+  - `--write_restored_cache`：把生成的 restored wav 写入缓存。
+  - `--read_restored_cache`：评测时优先读取缓存 restored wav。
+  - `--read_restored_cache_only`：仅从缓存读取 restored（缺失则跳过，不再推理）。
+  - `--restore_only`：只做 coded->restored 缓存，不计算指标。
+
+推荐：两阶段缓存流程（先缓存，再评测）
+
+第一阶段：仅生成并缓存 restored wav（全量）
+
+```bash
+python my_methods_GAN/scripts/eval_objective_quality_experiment_a.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --codec_name opus \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/checkpoints/epoch_008.pt \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/expA_restore_cache_opus.json \
+  --device cuda \
+  --restore_only \
+  --restored_cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/restored_cache/opus \
+  --write_restored_cache \
+  --infer_chunk_seconds 4 \
+  --infer_hop_seconds 4 \
+  --infer_chunk_batch_size 32 \
+  --verbose_every 200
+```
+
+第二阶段：仅读缓存 restored，计算客观指标
+
+```bash
+python my_methods_GAN/scripts/eval_objective_quality_experiment_a.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --codec_name opus \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/expA_objective_quality_eval_only_opus_cached.json \
+  --metrics si_sdr_db,snr_db,l1,mse,mrstft,complex_l1,stoi,pesq_wb \
+  --disable_pesq_wb \
+  --device cuda \
+  --restored_cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/restored_cache/opus \
+  --read_restored_cache \
+  --read_restored_cache_only \
+  --metric_chunk_seconds 4 \
+  --metric_hop_seconds 4 \
+  --mp_metric_workers 2 \
+  --mp_metric_prefetch 16 \
+  --mp_metric_start_method spawn \
+  --mp_metric_max_tasks_per_child 100 \
+  --verbose_every 200
+```
+
+eval 全量评测（Opus）：
+
+```bash
+python my_methods_GAN/scripts/eval_objective_quality_experiment_a.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --codec_name opus \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_q25_third/checkpoints/epoch_008.pt \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/expA_objective_quality_eval_only_opus.json \
+  --metrics si_sdr_db,snr_db,l1,mse,mrstft,complex_l1,stoi,pesq_wb \
+  --device cuda \
+  --infer_chunk_seconds 16 \
+  --infer_hop_seconds 16 \
+  --infer_chunk_batch_size 8 \
+  --metric_chunk_seconds 16 \
+  --metric_hop_seconds 16 \
+  --mp_metric_workers 2 \
+  --mp_metric_prefetch 16 \
+  --mp_metric_start_method spawn \
+  --mp_metric_max_tasks_per_child 100 \
+  --verbose_every 200 \
+  --clear_cuda_every 200 \
+  --gc_collect_every 0
+```
+
+eval 全量评测（AMR-WB）：
+
+```bash
+python my_methods_GAN/scripts/eval_objective_quality_experiment_a.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
+  --codec_name amrwb \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_q25/best_generator.pt \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/expA_objective_quality_eval_amrwb.json \
+  --verbose_every 200 \
+  --device cuda
+```
+
+快速冒烟测试（先验证链路）：
+
+```bash
+python my_methods_GAN/scripts/eval_objective_quality_experiment_a.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --codec_name opus \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_q25/best_generator.pt \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/expA_objective_quality_eval_opus_smoke.json \
+  --max_utts 5 \
+  --device cpu
+```
+
+可选：若 `scp` 中路径为容器内绝对路径（如 `/workspace/camplusplus/...`）与当前环境不一致，可使用路径映射：
+
+```bash
+python my_methods_GAN/scripts/eval_objective_quality_experiment_a.py \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
+  --codec_name opus \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_q25/best_generator.pt \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/expA_objective_quality_eval_opus.json \
+  --path_remap /workspace/camplusplus=/home/dgx/lkj/camplusplus \
+  --device cuda
+```
+
+## 15. 绘制 clean 与 coded（AMR-WB）时频图对比
+
+脚本：my_methods_GAN/scripts/plot_clean_coded_spectrogram.py
+
+基础用法（默认就是大字号）：
+
+```bash
+python my_methods_GAN/scripts/plot_clean_coded_spectrogram.py \
+  --clean_wav my_methods_GAN/data/cnceleb_truepair/clean_train_wav/id00000/singing-01-001.wav \
+  --coded_wav my_methods_GAN/data/cnceleb_truepair/coded_train_opus_16k/id00000/singing-01-001.wav \
+  --codec_name Opus \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/spec_clean_vs_Opuss.png
+```
+
+更大字号（汇报图推荐）：
+
+```bash
+python my_methods_GAN/scripts/plot_clean_coded_spectrogram.py \
+  --clean_wav my_methods_GAN/data/cnceleb_truepair/clean_train_wav/id00000/singing-01-001.wav \
+  --coded_wav my_methods_GAN/data/cnceleb_truepair/coded_train_amrwb_1585/id00000/singing-01-001.wav \
+  --codec_name AMR-WB \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/spec_clean_vs_amrwb_bigfont.png \
+  --font_size 26 \
+  --title_size 32 \
+  --subplot_title_size 28 \
+  --label_size 26 \
+  --tick_size 22 \
+  --colorbar_size 22 \
+  --fig_width 20 \
+  --fig_height 9 \
+  --dpi 260
+```
+
+## 16. coded 输入模型并导出 restored，再绘制 clean/coded/restored 时频图
+
+脚本：my_methods_GAN/scripts/plot_clean_coded_restored_spectrogram.py
+
+示例（AMR-WB，导出 restored wav + 三联时频图）：
+
+```bash
+python my_methods_GAN/scripts/plot_clean_coded_restored_spectrogram.py \
+  --clean_wav my_methods_GAN/data/cnceleb_truepair/clean_train_wav/id00000/singing-01-001.wav \
+  --coded_wav my_methods_GAN/data/cnceleb_truepair/coded_train_amrwb_1585/id00000/singing-01-001.wav \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_020.pt \
+  --output_restored_wav my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/restored_amrwb_singing-01-001.wav \
+  --output_png my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/spec_clean_coded_restored_amrwb.png \
+  --coded_title "Coded (AMR-WB)" \
+  --restored_title "Restored (Generator)" \
+  --font_size 24 \
+  --title_size 30 \
+  --subplot_title_size 26 \
+  --label_size 24 \
+  --tick_size 19 \
+  --colorbar_size 19 \
+  --fig_width 27 \
+  --fig_height 8 \
+  --dpi 240
+```
+
+若右侧 dB 色条仍偏左，可继续右移：
+
+```bash
+--colorbar_left 0.935 --colorbar_width 0.016
+```
