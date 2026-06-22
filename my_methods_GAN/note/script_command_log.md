@@ -981,8 +981,8 @@ python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
-  --clean_root my_methods_GAN/data/cnceleb_truepair/eval_clean \
-  --coded_root my_methods_GAN/data/cnceleb_truepair/eval_coded_opus_16k \
+  --clean_root /root/autodl-tmp/SC_data/voxceleb_data/eval_data \
+  --coded_root /root/autodl-tmp/SC_data/data/voxceleb1/eval_coded_opus_16k \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \

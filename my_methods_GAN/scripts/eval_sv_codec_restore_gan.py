@@ -20,6 +20,7 @@ if __package__ is None or __package__ == "":
 
 from sv_codec_restore_gan.models.campplus_wrapper import FrozenCampPlus
 from sv_codec_restore_gan.models.ecapa_tdnn_wrapper import FrozenECAPATDNN
+from sv_codec_restore_gan.models.eres2net_wrapper import FrozenERes2Net
 from sv_codec_restore_gan.models.generator import SVCodecRestoreGenerator
 from sv_codec_restore_gan.utils.audio import load_audio_mono
 from sv_codec_restore_gan.utils.metrics import compute_eer_mindcf
@@ -54,6 +55,12 @@ def build_backend(backend_type: str, backend_ckpt: str | Path) -> BackendConfig:
             feature_type="fbank",
             frame_length_ms=25.0,
             frame_shift_ms=10.0,
+        )
+    if backend_name == "eres2net":
+        return BackendConfig(
+            name="eres2net",
+            model=FrozenERes2Net(ckpt_path),
+            feature_type="fbank",
         )
     raise ValueError(f"Unsupported backend_type: {backend_type}")
 
@@ -772,7 +779,7 @@ def parse_args():
     p.add_argument("--trial_sample_seed", type=int, default=42, help="Random seed for stratified trial sampling.")
     p.add_argument("--conditions", type=str, default="clean,coded,restored", help="Comma-separated eval conditions: clean,coded,restored")
     p.add_argument("--generator_ckpt", type=str, default="", help="Required only when conditions include restored.")
-    p.add_argument("--backend_type", type=str, default="campplus", choices=["campplus", "ecapa_tdnn"])
+    p.add_argument("--backend_type", type=str, default="campplus", choices=["campplus", "ecapa_tdnn", "eres2net"])
     p.add_argument("--backend_ckpt", type=str, default="", help="Checkpoint path for the chosen speaker backend.")
     p.add_argument("--campplus_ckpt", type=str, default="", help="Backward-compatible alias for --backend_ckpt.")
     p.add_argument("--output_json", type=str, required=True)

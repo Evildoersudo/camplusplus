@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Batch evaluate coded-only SV metrics for multiple codec scp files.")
     p.add_argument("--codec_scp", type=str, required=True, help="Comma-separated codec_tag=scp_path entries.")
     p.add_argument("--trials_file", type=str, required=True)
-    p.add_argument("--backend_type", type=str, default="campplus", choices=["campplus", "ecapa_tdnn"])
+    p.add_argument("--backend_type", type=str, default="campplus", choices=["campplus", "ecapa_tdnn", "eres2net"])
     p.add_argument("--backend_ckpt", type=str, default="", help="Checkpoint path for the chosen speaker backend.")
     p.add_argument("--campplus_ckpt", type=str, default="", help="Backward-compatible alias for --backend_ckpt.")
     p.add_argument("--output_json", type=str, required=True)
