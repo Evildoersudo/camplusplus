@@ -726,8 +726,9 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
   --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
   --conditions clean,coded \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_opus16_clean_coded.json \
+  --backend_type ecapa_tdnn \
+  --backend_ckpt my_methods_GAN/pretrained/speech_ecapa-tdnn_sv_zh-cn_cnceleb_16k/ecapa-tdnn.ckpt \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_opus16_clean_coded_ecapa_tdnn.json \
   --use_cache \
   --cache_incremental \
   --cache_save_every 100 \
@@ -741,19 +742,20 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
   --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
-  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb885.scp \
+  --trials_file /root/autodl-tmp/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
   --conditions restored \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_020.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_amrwb_plus.json \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_amrwb_1585_1265_q25/best_generator_sv.pt \
+  --backend_type campplus \
+  --backend_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/amrwb_1265_1585_test_885.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.1 \
-  --restore_chunk_batch_size 32 \
+  --restore_chunk_batch_size 12 \
   --use_cache \
   --cache_incremental \
-  --cache_save_every 200 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/amrwb/emb_cache \
+  --cache_save_every 100 \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/campplus/amrwb_885/emb_cache \
   --device cuda
 ```
 ```
@@ -987,10 +989,10 @@ python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
   --workers 16
 
 python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
-  --clean_root my_methods_GAN/data/cnceleb_truepair/eval_clean \
-  --coded_root my_methods_GAN/data/cnceleb_truepair/eval_coded_amrwb_1585 \
+  --clean_root /root/autodl-tmp/SC_data/data/eval_clean \
+  --coded_root /root/autodl-tmp/SC_data/data/eval_coded_amrwb_885 \
   --codec amrwb \
-  --bitrate 15.85k \
+  --bitrate 8.85k \
   --sample_rate 16000 \
   --workers 16
 
@@ -1022,10 +1024,10 @@ python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
   --strict
 
 python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
-  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
-  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_amrwb_1585 \
-  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb1585.scp \
+  --trials_file /root/autodl-tmp/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --eval_clean_dir /root/autodl-tmp/SC_data/data/eval_clean \
+  --eval_coded_dir /root/autodl-tmp/SC_data/data/eval_coded_amrwb_885 \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb885.scp \
   --skip_clean_scp \
   --strict
 

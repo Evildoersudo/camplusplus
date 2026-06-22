@@ -8,11 +8,12 @@ from pathlib import Path
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from sv_codec_restore_gan.models.campplus_wrapper import FrozenCampPlus
 from sv_codec_restore_gan.utils.metrics import compute_eer_mindcf
 
 from eval_sv_codec_restore_gan import (
+    build_backend,
     build_trial_sampling_cache_tag,
     dump_speaker_embeddings,
     extract_emb_plain,
@@ -47,7 +48,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Batch evaluate coded-only SV metrics for multiple codec scp files.")
     p.add_argument("--codec_scp", type=str, required=True, help="Comma-separated codec_tag=scp_path entries.")
     p.add_argument("--trials_file", type=str, required=True)
-    p.add_argument("--campplus_ckpt", type=str, required=True)
+    p.add_argument("--backend_type", type=str, default="campplus", choices=["campplus", "ecapa_tdnn"])
+    p.add_argument("--backend_ckpt", type=str, default="", help="Checkpoint path for the chosen speaker backend.")
+    p.add_argument("--campplus_ckpt", type=str, default="", help="Backward-compatible alias for --backend_ckpt.")
     p.add_argument("--output_json", type=str, required=True)
     p.add_argument(
         "--output_png",
@@ -74,7 +77,8 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--plain_loader_batch_size", type=int, default=64)
     p.add_argument("--plain_num_workers", type=int, default=4)
-    p.add_argument("--plain_camp_batch_size", type=int, default=32)
+    p.add_argument("--plain_backend_batch_size", type=int, default=32)
+    p.add_argument("--plain_camp_batch_size", dest="plain_backend_batch_size", type=int, help="Backward-compatible alias for --plain_backend_batch_size.")
 
     p.add_argument("--dump_speaker_npy_dir", type=str, default="")
     p.add_argument("--speaker_id_sep", type=str, default="/")
@@ -132,6 +136,10 @@ def maybe_plot_summary(results: list[dict], output_png: Path, args: argparse.Nam
 
 def main() -> None:
     args = parse_args()
+    if not args.backend_ckpt:
+        args.backend_ckpt = args.campplus_ckpt
+    if not args.backend_ckpt:
+        raise ValueError("Please provide --backend_ckpt, or use the legacy --campplus_ckpt alias.")
     if args.trial_sample_fraction <= 0:
         raise ValueError("--trial_sample_fraction must be > 0")
 
@@ -153,10 +161,11 @@ def main() -> None:
     import torch
 
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
-    camp = FrozenCampPlus(args.campplus_ckpt).to(device)
+    backend = build_backend(args.backend_type, args.backend_ckpt)
+    backend.model.to(device)
 
     cache_dir = None
-    camp_tag = Path(args.campplus_ckpt).stem
+    backend_tag = Path(args.backend_ckpt).stem
     sample_tag = build_trial_sampling_cache_tag(args, trial_meta)
     if args.use_cache:
         cache_dir = Path(args.cache_dir).resolve() if args.cache_dir else Path(args.output_json).resolve().parent / "emb_cache_coded_only"
@@ -173,12 +182,12 @@ def main() -> None:
         cache_path = None
         if cache_dir is not None:
             scp_tag = Path(scp_path).stem
-            cache_path = cache_dir / f"codedonly__{codec_tag}__{scp_tag}__camp_{camp_tag}{sample_tag}.npz"
+            cache_path = cache_dir / f"codedonly__{codec_tag}__{scp_tag}__backend_{args.backend_type}_{backend_tag}{sample_tag}.npz"
 
         emb = extract_emb_plain(
             utt2wav=scp_eval,
             mode=f"coded_{codec_tag}",
-            camp=camp,
+            backend=backend,
             device=device,
             cache_path=cache_path,
             overwrite_cache=args.overwrite_cache,
@@ -186,7 +195,7 @@ def main() -> None:
             cache_incremental=args.cache_incremental,
             plain_loader_batch_size=args.plain_loader_batch_size,
             plain_num_workers=args.plain_num_workers,
-            plain_camp_batch_size=args.plain_camp_batch_size,
+            plain_backend_batch_size=args.plain_backend_batch_size,
         )
 
         labels, scores = score_trials(trials, emb)

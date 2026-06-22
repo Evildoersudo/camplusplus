@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import sys
@@ -15,11 +16,46 @@ from torch.utils.data import DataLoader, Dataset
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sv_codec_restore_gan.models.campplus_wrapper import FrozenCampPlus
+from sv_codec_restore_gan.models.ecapa_tdnn_wrapper import FrozenECAPATDNN
 from sv_codec_restore_gan.models.generator import SVCodecRestoreGenerator
 from sv_codec_restore_gan.utils.audio import load_audio_mono
 from sv_codec_restore_gan.utils.metrics import compute_eer_mindcf
+
+
+@dataclass(frozen=True)
+class BackendConfig:
+    name: str
+    model: torch.nn.Module
+    feature_type: str
+    sample_rate: int = 16000
+    feat_dim: int = 80
+    frame_length_ms: float = 25.0
+    frame_shift_ms: float = 10.0
+
+
+def build_backend(backend_type: str, backend_ckpt: str | Path) -> BackendConfig:
+    backend_name = backend_type.strip().lower()
+    ckpt_path = Path(backend_ckpt).resolve()
+    if backend_name == "campplus":
+        return BackendConfig(
+            name="campplus",
+            model=FrozenCampPlus(ckpt_path),
+            feature_type="fbank",
+        )
+    if backend_name == "ecapa_tdnn":
+        return BackendConfig(
+            name="ecapa_tdnn",
+            model=FrozenECAPATDNN(ckpt_path),
+            # Keep feature extraction aligned with speakerlab's released
+            # ECAPA inference pipeline for this checkpoint.
+            feature_type="fbank",
+            frame_length_ms=25.0,
+            frame_shift_ms=10.0,
+        )
+    raise ValueError(f"Unsupported backend_type: {backend_type}")
 
 
 def save_embedding_cache(path: Path, embd: dict[str, np.ndarray]) -> None:
@@ -295,35 +331,55 @@ def parse_conditions(text: str) -> list[str]:
     return dedup
 
 
-def fbank_one(wav: torch.Tensor) -> torch.Tensor:
-    feat = Kaldi.fbank(wav.unsqueeze(0), num_mel_bins=80, sample_frequency=16000, dither=0.0)
+def extract_feature_one(wav: torch.Tensor, backend: BackendConfig) -> torch.Tensor:
+    kaldi_kwargs = {
+        "sample_frequency": float(backend.sample_rate),
+        "frame_length": float(backend.frame_length_ms),
+        "frame_shift": float(backend.frame_shift_ms),
+        "dither": 0.0,
+    }
+    if backend.feature_type == "fbank":
+        feat = Kaldi.fbank(
+            wav.unsqueeze(0),
+            num_mel_bins=int(backend.feat_dim),
+            **kaldi_kwargs,
+        )
+    elif backend.feature_type == "mfcc":
+        feat = Kaldi.mfcc(
+            wav.unsqueeze(0),
+            num_ceps=int(backend.feat_dim),
+            num_mel_bins=int(backend.feat_dim),
+            **kaldi_kwargs,
+        )
+    else:
+        raise ValueError(f"Unsupported feature_type: {backend.feature_type}")
     feat = feat - feat.mean(0, keepdim=True)
     return feat.unsqueeze(0)
 
 
-class PlainFbankDataset(Dataset):
-    def __init__(self, items: list[tuple[str, str]]):
+class PlainFeatureDataset(Dataset):
+    def __init__(self, items: list[tuple[str, str]], backend: BackendConfig):
         self.items = items
+        self.backend = backend
 
     def __len__(self) -> int:
         return len(self.items)
 
     def __getitem__(self, idx: int) -> tuple[str, torch.Tensor]:
         utt, wav_path = self.items[idx]
-        wav = load_audio_mono(wav_path, sample_rate=16000)
-        # Keep feature on CPU and defer model forward to main process/GPU.
-        feat = fbank_one(wav).squeeze(0).contiguous()
+        wav = load_audio_mono(wav_path, sample_rate=self.backend.sample_rate)
+        feat = extract_feature_one(wav, self.backend).squeeze(0).contiguous()
         return utt, feat
 
 
-def _collate_plain_fbank(batch: list[tuple[str, torch.Tensor]]) -> tuple[list[str], list[torch.Tensor]]:
+def _collate_plain_feature(batch: list[tuple[str, torch.Tensor]]) -> tuple[list[str], list[torch.Tensor]]:
     utts = [x[0] for x in batch]
     feats = [x[1] for x in batch]
     return utts, feats
 
 
-def _run_camp_batch(
-    camp: FrozenCampPlus,
+def _run_backend_batch(
+    backend: BackendConfig,
     device: torch.device,
     buckets: dict[int, list[tuple[str, torch.Tensor]]],
     out: dict[str, np.ndarray],
@@ -338,7 +394,7 @@ def _run_camp_batch(
             del queue[:max_batch_size]
             utts = [x[0] for x in chunk]
             feats = torch.stack([x[1] for x in chunk], dim=0).to(device)
-            emb = F.normalize(camp(feats), dim=-1)
+            emb = F.normalize(backend.model(feats), dim=-1)
             emb_np = emb.detach().cpu().numpy().astype(np.float32)
             for i, utt in enumerate(utts):
                 out[utt] = emb_np[i]
@@ -346,8 +402,8 @@ def _run_camp_batch(
                 processed_utts.add(utt)
 
 
-def _flush_camp_buckets(
-    camp: FrozenCampPlus,
+def _flush_backend_buckets(
+    backend: BackendConfig,
     device: torch.device,
     buckets: dict[int, list[tuple[str, torch.Tensor]]],
     out: dict[str, np.ndarray],
@@ -360,7 +416,7 @@ def _flush_camp_buckets(
             continue
         utts = [x[0] for x in queue]
         feats = torch.stack([x[1] for x in queue], dim=0).to(device)
-        emb = F.normalize(camp(feats), dim=-1)
+        emb = F.normalize(backend.model(feats), dim=-1)
         emb_np = emb.detach().cpu().numpy().astype(np.float32)
         for i, utt in enumerate(utts):
             out[utt] = emb_np[i]
@@ -514,7 +570,7 @@ def _flush_incremental_cache(
 def extract_emb_plain(
     utt2wav: dict[str, str],
     mode: str,
-    camp: FrozenCampPlus,
+    backend: BackendConfig,
     device: torch.device,
     cache_path: Path | None,
     overwrite_cache: bool,
@@ -522,7 +578,7 @@ def extract_emb_plain(
     cache_incremental: bool,
     plain_loader_batch_size: int,
     plain_num_workers: int,
-    plain_camp_batch_size: int,
+    plain_backend_batch_size: int,
 ) -> dict[str, np.ndarray]:
     if cache_path is not None and cache_path.exists() and not overwrite_cache:
         print(f"[{mode}] load embedding cache: {cache_path}")
@@ -536,7 +592,7 @@ def extract_emb_plain(
         cache_save_every=cache_save_every,
     )
 
-    camp.eval()
+    backend.model.eval()
     items = [(utt, wav_path) for utt, wav_path in utt2wav.items() if utt not in processed_utts]
     total = len(items)
     if total == 0:
@@ -547,19 +603,19 @@ def extract_emb_plain(
 
     loader_batch_size = max(1, int(plain_loader_batch_size))
     num_workers = max(0, int(plain_num_workers))
-    camp_batch_size = max(1, int(plain_camp_batch_size))
+    backend_batch_size = max(1, int(plain_backend_batch_size))
 
     loader_kwargs = {
         "batch_size": loader_batch_size,
         "shuffle": False,
         "num_workers": num_workers,
-        "collate_fn": _collate_plain_fbank,
+        "collate_fn": _collate_plain_feature,
         "pin_memory": device.type == "cuda",
     }
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
 
-    loader = DataLoader(PlainFbankDataset(items), **loader_kwargs)
+    loader = DataLoader(PlainFeatureDataset(items, backend), **loader_kwargs)
 
     buckets: dict[int, list[tuple[str, torch.Tensor]]] = {}
     next_report = 200
@@ -569,14 +625,14 @@ def extract_emb_plain(
                 tlen = int(feat.shape[0])
                 buckets.setdefault(tlen, []).append((utt, feat))
 
-            _run_camp_batch(
-                camp=camp,
+            _run_backend_batch(
+                backend=backend,
                 device=device,
                 buckets=buckets,
                 out=out,
                 pending=pending,
                 processed_utts=processed_utts,
-                max_batch_size=camp_batch_size,
+                max_batch_size=backend_batch_size,
             )
 
             processed_cnt = len(processed_utts)
@@ -587,8 +643,8 @@ def extract_emb_plain(
             if cache_incremental and cache_path is not None and parts_dir is not None and len(pending) >= save_every:
                 part_id = _flush_incremental_cache(mode, pending, cache_path, parts_dir, part_id)
 
-        _flush_camp_buckets(
-            camp=camp,
+        _flush_backend_buckets(
+            backend=backend,
             device=device,
             buckets=buckets,
             out=out,
@@ -609,7 +665,7 @@ def extract_emb_restored(
     utt2wav: dict[str, str],
     mode: str,
     generator: SVCodecRestoreGenerator,
-    camp: FrozenCampPlus,
+    backend: BackendConfig,
     device: torch.device,
     restore_chunk_seconds: float,
     restore_overlap_seconds: float,
@@ -635,13 +691,13 @@ def extract_emb_restored(
     )
 
     generator.eval()
-    camp.eval()
+    backend.model.eval()
     with torch.inference_mode():
         for idx, (utt, wav_path) in enumerate(utt2wav.items(), start=1):
             if utt in processed_utts:
                 continue
 
-            wav = load_audio_mono(wav_path, sample_rate=16000)
+            wav = load_audio_mono(wav_path, sample_rate=backend.sample_rate)
             if restore_auto_shrink:
                 wav = restore_in_chunks_adaptive(
                     wav,
@@ -652,7 +708,7 @@ def extract_emb_restored(
                     chunk_batch_size=restore_chunk_batch_size,
                     min_chunk_seconds=restore_min_chunk_seconds,
                     chunk_shrink_factor=restore_chunk_shrink_factor,
-                    sample_rate=16000,
+                    sample_rate=backend.sample_rate,
                 )
             else:
                 wav = restore_in_chunks(
@@ -662,11 +718,11 @@ def extract_emb_restored(
                     chunk_seconds=restore_chunk_seconds,
                     overlap_seconds=restore_overlap_seconds,
                     chunk_batch_size=restore_chunk_batch_size,
-                    sample_rate=16000,
+                    sample_rate=backend.sample_rate,
                 )
 
-            feat = fbank_one(wav).to(device)
-            emb = camp(feat).squeeze(0)
+            feat = extract_feature_one(wav, backend).to(device)
+            emb = backend.model(feat).squeeze(0)
             emb = F.normalize(emb, dim=-1)
             emb_np = emb.detach().cpu().numpy().astype(np.float32)
             out[utt] = emb_np
@@ -705,7 +761,7 @@ def score_trials(trials, embd) -> tuple[list[int], list[float]]:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Evaluate clean/coded/restored SV metrics with CAM++ backend.")
+    p = argparse.ArgumentParser(description="Evaluate clean/coded/restored SV metrics with configurable speaker backends.")
     p.add_argument("--clean_wav_scp", type=str, required=True)
     p.add_argument("--coded_wav_scp", type=str, required=True)
     p.add_argument("--trials_file", type=str, required=True)
@@ -716,7 +772,9 @@ def parse_args():
     p.add_argument("--trial_sample_seed", type=int, default=42, help="Random seed for stratified trial sampling.")
     p.add_argument("--conditions", type=str, default="clean,coded,restored", help="Comma-separated eval conditions: clean,coded,restored")
     p.add_argument("--generator_ckpt", type=str, default="", help="Required only when conditions include restored.")
-    p.add_argument("--campplus_ckpt", type=str, required=True)
+    p.add_argument("--backend_type", type=str, default="campplus", choices=["campplus", "ecapa_tdnn"])
+    p.add_argument("--backend_ckpt", type=str, default="", help="Checkpoint path for the chosen speaker backend.")
+    p.add_argument("--campplus_ckpt", type=str, default="", help="Backward-compatible alias for --backend_ckpt.")
     p.add_argument("--output_json", type=str, required=True)
     p.add_argument("--restore_chunk_seconds", type=float, default=8.0, help="Chunk size (seconds) for restored inference. <=0 means full-utterance inference.")
     p.add_argument("--restore_overlap_seconds", type=float, default=0.1, help="Chunk overlap (seconds) for restored inference.")
@@ -737,7 +795,8 @@ def parse_args():
     p.set_defaults(cache_incremental=True)
     p.add_argument("--plain_loader_batch_size", type=int, default=64, help="DataLoader batch size for plain (clean/coded) feature extraction workers.")
     p.add_argument("--plain_num_workers", type=int, default=4, help="DataLoader worker count for plain (clean/coded) feature extraction.")
-    p.add_argument("--plain_camp_batch_size", type=int, default=32, help="CAMP++ batch size for plain branches (same-frame-length grouped).")
+    p.add_argument("--plain_backend_batch_size", type=int, default=32, help="Backend batch size for plain branches (same-frame-length grouped).")
+    p.add_argument("--plain_camp_batch_size", dest="plain_backend_batch_size", type=int, help="Backward-compatible alias for --plain_backend_batch_size.")
     p.add_argument("--dump_speaker_npy_dir", type=str, default="", help="If set, dump per-speaker embedding .npy files under <dir>/{clean,coded,restored}/")
     p.add_argument("--speaker_id_sep", type=str, default="/", help="Separator for parsing speaker id from utt key.")
     p.add_argument("--speaker_id_field", type=int, default=0, help="Field index after split for speaker id extraction.")
@@ -747,6 +806,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if not args.backend_ckpt:
+        args.backend_ckpt = args.campplus_ckpt
+    if not args.backend_ckpt:
+        raise ValueError("Please provide --backend_ckpt, or use the legacy --campplus_ckpt alias.")
+
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     conditions = parse_conditions(args.conditions)
 
@@ -812,7 +876,8 @@ def main():
         generator.to(device)
         gen_tag = Path(args.generator_ckpt).stem
 
-    camp = FrozenCampPlus(args.campplus_ckpt).to(device)
+    backend = build_backend(args.backend_type, args.backend_ckpt)
+    backend.model.to(device)
 
     cache_dir = None
     clean_cache = None
@@ -822,18 +887,18 @@ def main():
         cache_dir = Path(args.cache_dir).resolve() if args.cache_dir else Path(args.output_json).resolve().parent / "emb_cache"
         clean_scp_tag = Path(args.clean_wav_scp).stem
         coded_scp_tag = Path(args.coded_wav_scp).stem
-        camp_tag = Path(args.campplus_ckpt).stem
+        backend_tag = Path(args.backend_ckpt).stem
         sample_tag = build_trial_sampling_cache_tag(args, trial_meta)
-        clean_cache = cache_dir / f"clean__{clean_scp_tag}__camp_{camp_tag}{sample_tag}.npz"
-        coded_cache = cache_dir / f"coded__{coded_scp_tag}__camp_{camp_tag}{sample_tag}.npz"
-        restored_cache = cache_dir / f"restored__{coded_scp_tag}__gen_{gen_tag}__camp_{camp_tag}{sample_tag}.npz"
+        clean_cache = cache_dir / f"clean__{clean_scp_tag}__backend_{args.backend_type}_{backend_tag}{sample_tag}.npz"
+        coded_cache = cache_dir / f"coded__{coded_scp_tag}__backend_{args.backend_type}_{backend_tag}{sample_tag}.npz"
+        restored_cache = cache_dir / f"restored__{coded_scp_tag}__gen_{gen_tag}__backend_{args.backend_type}_{backend_tag}{sample_tag}.npz"
 
     emb_by_mode: dict[str, dict[str, np.ndarray]] = {}
     if "clean" in conditions:
         emb_by_mode["clean"] = extract_emb_plain(
             clean_scp_eval,
             "clean",
-            camp,
+            backend,
             device,
             cache_path=clean_cache,
             overwrite_cache=args.overwrite_cache,
@@ -841,13 +906,13 @@ def main():
             cache_incremental=args.cache_incremental,
             plain_loader_batch_size=args.plain_loader_batch_size,
             plain_num_workers=args.plain_num_workers,
-            plain_camp_batch_size=args.plain_camp_batch_size,
+            plain_backend_batch_size=args.plain_backend_batch_size,
         )
     if "coded" in conditions:
         emb_by_mode["coded"] = extract_emb_plain(
             coded_scp_eval,
             "coded",
-            camp,
+            backend,
             device,
             cache_path=coded_cache,
             overwrite_cache=args.overwrite_cache,
@@ -855,14 +920,14 @@ def main():
             cache_incremental=args.cache_incremental,
             plain_loader_batch_size=args.plain_loader_batch_size,
             plain_num_workers=args.plain_num_workers,
-            plain_camp_batch_size=args.plain_camp_batch_size,
+            plain_backend_batch_size=args.plain_backend_batch_size,
         )
     if "restored" in conditions:
         emb_by_mode["restored"] = extract_emb_restored(
             coded_scp_eval,
             "restored",
             generator,
-            camp,
+            backend,
             device,
             restore_chunk_seconds=args.restore_chunk_seconds,
             restore_overlap_seconds=args.restore_overlap_seconds,
