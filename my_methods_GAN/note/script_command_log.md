@@ -722,40 +722,40 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
 
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
-  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
-  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_clean_official.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_coded_opus16k_official.scp \
+  --trials_file /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
   --conditions clean,coded \
-  --backend_type ecapa_tdnn \
-  --backend_ckpt my_methods_GAN/pretrained/speech_ecapa-tdnn_sv_zh-cn_cnceleb_16k/ecapa-tdnn.ckpt \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/opus16+amrwb1585_B_opus16_clean_coded_ecapa_tdnn.json \
+  --backend_type campplus \
+  --backend_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore_vox/run_main/eval_results/opus16_official_clean_coded_campplus.json \
   --use_cache \
   --cache_incremental \
   --cache_save_every 100 \
   --plain_loader_batch_size 64 \
   --plain_num_workers 4 \
   --plain_camp_batch_size 32 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/opus/emb_cache \
+  --cache_dir my_methods_GAN/exp/sv_codec_restore_vox/run_main/voxceleb/opus/official_emb_cache \
   --device cuda
 ```
 
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
-  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_clean.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore/eval_coded_amrwb885.scp \
-  --trials_file /root/autodl-tmp/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
+  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_clean_official.scp \
+  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_coded_opus16k_official.scp \
+  --trials_file /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
   --conditions restored \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_amrwb_1585_1265_q25/best_generator_sv.pt \
+  --generator_ckpt my_methods_GAN/exp/sv_codec_restore_cn/run_expB2_camp_feat_q25_opus16_8k/best_generator_sv.pt \
   --backend_type campplus \
-  --backend_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore/run_main/eval_results/amrwb_1265_1585_test_885.json \
+  --backend_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --output_json my_methods_GAN/exp/sv_codec_restore_vox/run_main/eval_results/opus16k+8k_en_16k.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.1 \
   --restore_chunk_batch_size 12 \
   --use_cache \
   --cache_incremental \
   --cache_save_every 100 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore/run_main/campplus/amrwb_885/emb_cache \
+  --cache_dir /root/autodl-tmp/SC_data/run_main/voxceleb/opus/emb_cache \
   --device cuda
 ```
 ```
@@ -981,12 +981,12 @@ python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
-  --clean_root /root/autodl-tmp/SC_data/voxceleb_data/eval_data \
+  --clean_root /root/autodl-tmp/SC_data/voxceleb_data_test_raw \
   --coded_root /root/autodl-tmp/SC_data/data/voxceleb1/eval_coded_opus_16k \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
-  --workers 16
+  --workers 24
 
 python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
   --clean_root /root/autodl-tmp/SC_data/data/eval_clean \
@@ -1016,11 +1016,11 @@ python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
-  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac/eval/lists/trials.lst \
-  --eval_clean_dir my_methods_GAN/data/cnceleb_truepair/eval_clean \
-  --eval_coded_dir my_methods_GAN/data/cnceleb_truepair/eval_coded_opus_16k \
-  --coded_scp_out my_methods_GAN/exp/sv_codec_restore/eval_coded_opus16k.scp \
-  --skip_clean_scp \
+  --trials_file /root/autodl-tmp/SC_data/data/voxceleb1/eval_clean/trials.lst \
+  --eval_clean_dir /root/autodl-tmp/SC_data/data/voxceleb1/eval_clean \
+  --eval_coded_dir /root/autodl-tmp/SC_data/data/voxceleb1/eval_coded_opus_16k \
+  --coded_scp_out my_methods_GAN/exp/sv_codec_restore_vox/eval_coded_opus16k.scp \
+  --clean_scp_out \
   --strict
 
 python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
@@ -1085,8 +1085,8 @@ python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/prepare_cnceleb_truepair_data.py \
-  --raw_root egs/3dspeaker/sv-cam++/data/raw_data/CN-Celeb_flac \
-  --output_root my_methods_GAN/data/cnceleb_truepair \
+  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
+  --output_root /root/autodl-tmp/SC_data/data/voxceleb1 \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
