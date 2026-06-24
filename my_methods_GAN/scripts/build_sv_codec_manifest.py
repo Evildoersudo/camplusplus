@@ -22,12 +22,24 @@ def parse_args():
         help="One or more coded roots. Multiple roots are merged into multi-codec entries.",
     )
     p.add_argument("--output_csv", type=str, required=True)
+    p.add_argument(
+        "--include_manifest",
+        "--include-manifest",
+        type=str,
+        default=None,
+        help="Optional clean manifest selecting which utterances to include.",
+    )
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    n = build_pair_manifest(args.clean_root, args.coded_root, args.output_csv)
+    n = build_pair_manifest(
+        args.clean_root,
+        args.coded_root,
+        args.output_csv,
+        include_manifest=args.include_manifest,
+    )
     print(f"Saved manifest: {Path(args.output_csv).resolve()}")
     print(f"Paired utterances: {n}")
 

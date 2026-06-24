@@ -52,9 +52,12 @@ def _sample_rows(rows: list[dict], fraction: float, seed: int, stratified: bool)
 def main():
     args = parse_args()
     input_manifest = Path(args.input_manifest).resolve()
-    rows = list(csv.DictReader(input_manifest.open("r", encoding="utf-8", newline="")))
+    reader = csv.DictReader(input_manifest.open("r", encoding="utf-8", newline=""))
+    rows = list(reader)
     if not rows:
         raise ValueError(f"No rows found: {input_manifest}")
+    if not reader.fieldnames or "spk_id" not in reader.fieldnames:
+        raise ValueError(f"Manifest must contain spk_id column: {input_manifest}")
 
     spks = sorted({row["spk_id"] for row in rows})
     random.Random(args.seed).shuffle(spks)
@@ -67,9 +70,7 @@ def main():
     train_rows = _sample_rows(train_rows, args.train_fraction, args.seed, args.stratified)
     valid_rows = _sample_rows(valid_rows, args.valid_fraction, args.seed + 1, args.stratified)
 
-    fields = ["utt_id", "spk_id", "clean_wav", "codec_wav"]
-    if rows and "codec_type" in rows[0]:
-        fields.append("codec_type")
+    fields = list(reader.fieldnames)
 
     train_manifest = Path(args.train_manifest).resolve()
     valid_manifest = Path(args.valid_manifest).resolve()

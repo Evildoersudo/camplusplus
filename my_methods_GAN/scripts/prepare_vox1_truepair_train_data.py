@@ -9,8 +9,15 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import csv
 import subprocess
+import sys
 from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sv_codec_restore_gan.data.manifest import build_pair_manifest
 
 
 DEFAULT_WAV_ROOT = Path("/root/autodl-tmp/raw_data/vox1/train/wav")
@@ -34,7 +41,28 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TRIALS,
         help="Official VoxCeleb trial list used to identify test speakers.",
     )
+    parser.add_argument(
+        "--test_wav_root",
+        "--test-wav-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional VoxCeleb test WAV root in id/video/*.wav layout. "
+            "Use this when --raw_root is already a pre-split training tree."
+        ),
+    )
     parser.add_argument("--output_root", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--clean_root",
+        "--clean-root",
+        type=Path,
+        default=None,
+        help=(
+            "Existing clean WAV root in id/video/*.wav layout. Defaults to "
+            "OUTPUT_ROOT/clean_train_wav and is used to resume coded-only "
+            "generation when --raw_root is unavailable."
+        ),
+    )
     parser.add_argument(
         "--codec",
         choices=("opus", "aac", "amrwb", "g711_mulaw", "g711_alaw"),
@@ -44,6 +72,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--include_manifest",
+        "--include-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Optional manifest that selects which utterances to process. "
+            "Rows may contain clean_wav paths or rel_path values."
+        ),
+    )
+    parser.add_argument(
+        "--valid_include_manifest",
+        "--valid-include-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Optional validation manifest. When provided, the script also "
+            "transcodes this subset after the training subset."
+        ),
+    )
+    parser.add_argument(
+        "--train_pair_manifest",
+        "--train-pair-manifest",
+        type=Path,
+        default=None,
+        help="Optional output CSV for the train clean/coded pair manifest.",
+    )
+    parser.add_argument(
+        "--valid_pair_manifest",
+        "--valid-pair-manifest",
+        type=Path,
+        default=None,
+        help="Optional output CSV for the valid clean/coded pair manifest.",
+    )
     parser.add_argument(
         "--dry_run",
         "--dry-run",
@@ -80,6 +142,46 @@ def load_test_speakers(trials_path: Path) -> set[str]:
     if not speakers:
         raise ValueError(f"No test speakers found in {trials_path}")
     return speakers
+
+
+def collect_wavs(wav_root: Path) -> list[Path]:
+    return sorted(wav_root.glob("*/*/*.wav"))
+
+
+def collect_speakers(wav_root: Path, wavs: list[Path]) -> set[str]:
+    return {path.relative_to(wav_root).parts[0] for path in wavs}
+
+
+def _relative_manifest_path(path_text: str, roots: list[Path]) -> str:
+    path = Path(path_text)
+    if not path.is_absolute():
+        return path.as_posix()
+    for root in roots:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            pass
+    if len(path.parts) >= 3:
+        return Path(*path.parts[-3:]).as_posix()
+    raise ValueError(f"Cannot infer id/video/file relative path from {path_text!r}")
+
+
+def load_include_relpaths(manifest_path: Path, roots: list[Path]) -> set[str]:
+    relpaths: set[str] = set()
+    with manifest_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError(f"Manifest has no header: {manifest_path}")
+        for row_number, row in enumerate(reader, 2):
+            path_text = row.get("rel_path") or row.get("clean_wav")
+            if not path_text:
+                raise ValueError(
+                    f"Manifest row {row_number} must contain rel_path or clean_wav"
+                )
+            relpaths.add(_relative_manifest_path(path_text, roots))
+    if not relpaths:
+        raise ValueError(f"No include rows found in {manifest_path}")
+    return relpaths
 
 
 def run_ffmpeg(command: list[str]) -> None:
@@ -171,9 +273,10 @@ def create_coded(
     sample_rate: int,
     overwrite: bool,
 ) -> None:
-    if coded_wav.exists() and not overwrite:
+    if coded_wav.exists() and not overwrite and coded_wav.stat().st_size > 44:
         return
     coded_wav.parent.mkdir(parents=True, exist_ok=True)
+    coded_wav.unlink(missing_ok=True)
     temporary, encode, decode = build_codec_commands(
         clean_wav, coded_wav, codec, bitrate, sample_rate
     )
@@ -201,54 +304,235 @@ def run_parallel(tasks: list[tuple], function, workers: int, description: str) -
                 print(f"{description}: {completed}/{total}")
 
 
+def select_wavs(
+    wavs: list[Path],
+    source_root: Path,
+    test_speakers: set[str],
+    include_manifest: Path | None,
+    clean_root: Path,
+    raw_root: Path,
+    label: str,
+) -> list[Path]:
+    selected = [
+        path
+        for path in wavs
+        if path.relative_to(source_root).parts[0] not in test_speakers
+    ]
+    if include_manifest is None:
+        return selected
+
+    include_relpaths = load_include_relpaths(
+        include_manifest,
+        [source_root, clean_root, raw_root],
+    )
+    selected = [
+        path
+        for path in selected
+        if path.relative_to(source_root).as_posix() in include_relpaths
+    ]
+    if not selected:
+        raise RuntimeError(
+            f"No source WAVs matched --{label}_include_manifest: {include_manifest}"
+        )
+    return selected
+
+
+def build_tasks(
+    wavs: list[Path],
+    source_root: Path,
+    clean_root: Path,
+    coded_root: Path,
+    coded_only: bool,
+    sample_rate: int,
+    overwrite: bool,
+    codec: str,
+    bitrate: str,
+) -> tuple[list[tuple], list[tuple]]:
+    clean_tasks = []
+    coded_tasks = []
+    for source in wavs:
+        relative = source.relative_to(source_root)
+        clean_wav = source if coded_only else clean_root / relative
+        coded_wav = coded_root / relative
+        if not coded_only:
+            clean_tasks.append((source, clean_wav, sample_rate, overwrite))
+        coded_tasks.append(
+            (
+                clean_wav,
+                coded_wav,
+                codec,
+                bitrate,
+                sample_rate,
+                overwrite,
+            )
+        )
+    return clean_tasks, coded_tasks
+
+
+def write_pair_manifest(
+    manifest_path: Path | None,
+    clean_root: Path,
+    coded_root: Path,
+    include_manifest: Path | None,
+    label: str,
+) -> None:
+    if manifest_path is None:
+        return
+    if include_manifest is None:
+        raise ValueError(f"--{label}_pair_manifest requires --{label}_include_manifest")
+    count = build_pair_manifest(
+        clean_root,
+        coded_root,
+        manifest_path,
+        include_manifest=include_manifest,
+    )
+    print(f"Saved {label} pair manifest: {manifest_path.resolve()}")
+    print(f"{label.capitalize()} paired utterances: {count}")
+
+
 def main() -> int:
     args = parse_args()
     raw_root = args.raw_root.resolve()
     trials_path = args.test_trials.resolve()
+    test_wav_root = args.test_wav_root.resolve() if args.test_wav_root else None
+    include_manifest = args.include_manifest.resolve() if args.include_manifest else None
+    valid_include_manifest = (
+        args.valid_include_manifest.resolve()
+        if args.valid_include_manifest
+        else None
+    )
+    train_pair_manifest = (
+        args.train_pair_manifest.resolve()
+        if args.train_pair_manifest
+        else None
+    )
+    valid_pair_manifest = (
+        args.valid_pair_manifest.resolve()
+        if args.valid_pair_manifest
+        else None
+    )
     output_root = args.output_root.resolve()
+    bitrate_tag = args.bitrate.replace(".", "")
+    clean_root = (
+        args.clean_root.resolve()
+        if args.clean_root
+        else output_root / "clean_train_wav"
+    )
+    coded_root = output_root / f"coded_train_{args.codec}_{bitrate_tag}"
+    raw_root_exists = raw_root.is_dir()
+    clean_root_exists = clean_root.is_dir()
+    coded_only = not raw_root_exists and clean_root_exists
 
-    if not raw_root.is_dir():
-        raise FileNotFoundError(f"Missing VoxCeleb WAV root: {raw_root}")
+    if not raw_root_exists and not clean_root_exists:
+        raise FileNotFoundError(
+            f"Missing VoxCeleb WAV root: {raw_root}; also missing clean WAV "
+            f"root for coded-only resume: {clean_root}"
+        )
     if not trials_path.is_file():
         raise FileNotFoundError(f"Missing official test trials: {trials_path}")
+    if test_wav_root is not None and not test_wav_root.is_dir():
+        raise FileNotFoundError(f"Missing VoxCeleb test WAV root: {test_wav_root}")
+    if include_manifest is not None and not include_manifest.is_file():
+        raise FileNotFoundError(f"Missing include manifest: {include_manifest}")
+    if valid_include_manifest is not None and not valid_include_manifest.is_file():
+        raise FileNotFoundError(
+            f"Missing valid include manifest: {valid_include_manifest}"
+        )
+    if train_pair_manifest is not None and include_manifest is None:
+        raise ValueError("--train_pair_manifest requires --include_manifest")
+    if valid_pair_manifest is not None and valid_include_manifest is None:
+        raise ValueError("--valid_pair_manifest requires --valid_include_manifest")
     if args.workers < 1:
         raise ValueError("--workers must be at least 1")
 
     test_speakers = load_test_speakers(trials_path)
-    all_wavs = sorted(raw_root.glob("*/*/*.wav"))
-    if not all_wavs:
-        raise RuntimeError(f"No id/video/*.wav files found under {raw_root}")
+    if test_wav_root is not None:
+        test_wavs = collect_wavs(test_wav_root)
+        if not test_wavs:
+            raise RuntimeError(f"No id/video/*.wav files found under {test_wav_root}")
+        test_tree_speakers = collect_speakers(test_wav_root, test_wavs)
+        missing_test_speakers = sorted(test_speakers - test_tree_speakers)
+        if missing_test_speakers:
+            raise RuntimeError(
+                "Official test speakers are missing from --test_wav_root; "
+                f"missing test speakers: {missing_test_speakers[:10]}"
+            )
+    else:
+        test_wavs = []
+        test_tree_speakers = set()
 
-    all_speakers = {path.relative_to(raw_root).parts[0] for path in all_wavs}
+    source_root = clean_root if coded_only else raw_root
+    all_wavs = collect_wavs(source_root)
+    if not all_wavs:
+        raise RuntimeError(f"No id/video/*.wav files found under {source_root}")
+
+    all_speakers = collect_speakers(source_root, all_wavs)
     overlap = all_speakers & test_speakers
-    train_wavs = [
-        path
-        for path in all_wavs
-        if path.relative_to(raw_root).parts[0] not in test_speakers
-    ]
+    train_wavs = select_wavs(
+        all_wavs,
+        source_root,
+        test_speakers,
+        include_manifest,
+        clean_root,
+        raw_root,
+        "train",
+    )
+    valid_wavs = select_wavs(
+        all_wavs,
+        source_root,
+        test_speakers,
+        valid_include_manifest,
+        clean_root,
+        raw_root,
+        "valid",
+    ) if valid_include_manifest is not None else []
+
+    train_relpaths = {path.relative_to(source_root).as_posix() for path in train_wavs}
+    valid_relpaths = {path.relative_to(source_root).as_posix() for path in valid_wavs}
+    overlap_relpaths = train_relpaths & valid_relpaths
+    if overlap_relpaths:
+        examples = sorted(overlap_relpaths)[:10]
+        raise RuntimeError(
+            "Train/valid include manifests overlap; "
+            f"example overlapping utterances: {examples}"
+        )
     train_speakers = {
-        path.relative_to(raw_root).parts[0] for path in train_wavs
+        path.relative_to(source_root).parts[0] for path in train_wavs
+    }
+    valid_speakers = {
+        path.relative_to(source_root).parts[0] for path in valid_wavs
     }
 
-    if overlap != test_speakers:
+    if test_wav_root is None and overlap != test_speakers:
         missing = sorted(test_speakers - all_speakers)
         raise RuntimeError(
             "Official test speakers do not exactly match the WAV tree; "
-            f"missing test speakers: {missing[:10]}"
+            f"missing test speakers: {missing[:10]}. If --raw_root is already "
+            "a pre-split training tree, pass --test_wav_root to validate the "
+            "official test speakers separately."
         )
     if train_speakers & test_speakers:
         raise RuntimeError("Train/test speaker leakage detected")
 
-    bitrate_tag = args.bitrate.replace(".", "")
-    clean_root = output_root / "clean_train_wav"
-    coded_root = output_root / f"coded_train_{args.codec}_{bitrate_tag}"
-
+    print(f"Mode:                 {'coded-only resume' if coded_only else 'raw-to-clean-and-coded'}")
+    print(f"Source root:          {source_root}")
     print(f"Source WAVs:          {len(all_wavs)}")
     print(f"All speakers:         {len(all_speakers)}")
-    print(f"Excluded test WAVs:   {len(all_wavs) - len(train_wavs)}")
+    if test_wav_root is not None:
+        print(f"Test WAV root:        {test_wav_root}")
+        print(f"Test WAVs:            {len(test_wavs)}")
+        print(f"Test tree speakers:   {len(test_tree_speakers)}")
+    if include_manifest is not None:
+        print(f"Train include:        {include_manifest}")
+    if valid_include_manifest is not None:
+        print(f"Valid include:        {valid_include_manifest}")
+    print(f"Excluded test WAVs:   {len(all_wavs) - len(train_wavs) - len(valid_wavs)}")
     print(f"Excluded test spkrs:  {len(test_speakers)}")
     print(f"Training WAVs:        {len(train_wavs)}")
     print(f"Training speakers:    {len(train_speakers)}")
+    if valid_include_manifest is not None:
+        print(f"Validation WAVs:      {len(valid_wavs)}")
+        print(f"Validation speakers:  {len(valid_speakers)}")
     print(f"Clean output:         {clean_root}")
     print(f"Coded output:         {coded_root}")
 
@@ -256,26 +540,48 @@ def main() -> int:
         print("Dry run complete; no files were written.")
         return 0
 
-    clean_tasks = []
-    coded_tasks = []
-    for source in train_wavs:
-        relative = source.relative_to(raw_root)
-        clean_wav = clean_root / relative
-        coded_wav = coded_root / relative
-        clean_tasks.append((source, clean_wav, args.sample_rate, args.overwrite))
-        coded_tasks.append(
-            (
-                clean_wav,
-                coded_wav,
-                args.codec,
-                args.bitrate,
-                args.sample_rate,
-                args.overwrite,
-            )
-        )
+    clean_tasks, coded_tasks = build_tasks(
+        train_wavs,
+        source_root,
+        clean_root,
+        coded_root,
+        coded_only,
+        args.sample_rate,
+        args.overwrite,
+        args.codec,
+        args.bitrate,
+    )
+    valid_clean_tasks, valid_coded_tasks = build_tasks(
+        valid_wavs,
+        source_root,
+        clean_root,
+        coded_root,
+        coded_only,
+        args.sample_rate,
+        args.overwrite,
+        args.codec,
+        args.bitrate,
+    )
 
-    run_parallel(clean_tasks, normalize_clean, args.workers, "train clean")
+    if not coded_only:
+        run_parallel(clean_tasks, normalize_clean, args.workers, "train clean")
+        run_parallel(valid_clean_tasks, normalize_clean, args.workers, "valid clean")
     run_parallel(coded_tasks, create_coded, args.workers, "train coded")
+    run_parallel(valid_coded_tasks, create_coded, args.workers, "valid coded")
+    write_pair_manifest(
+        train_pair_manifest,
+        clean_root,
+        coded_root,
+        include_manifest,
+        "train",
+    )
+    write_pair_manifest(
+        valid_pair_manifest,
+        clean_root,
+        coded_root,
+        valid_include_manifest,
+        "valid",
+    )
     print("Done.")
     return 0
 

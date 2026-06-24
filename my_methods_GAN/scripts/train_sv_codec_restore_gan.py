@@ -174,8 +174,18 @@ def parse_args():
     p.add_argument("--phase3_no_wavlm", action="store_false", dest="phase3_use_wavlm", help="Disable WavLM distillation in phase3.")
     p.set_defaults(phase3_use_gan=False, use_mbd=False, phase3_use_wavlm=False)
 
-    p.add_argument("--wavlm_root", type=str, default="/home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM")
-    p.add_argument("--wavlm_ckpt", type=str, default="/home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt")
+    p.add_argument(
+        "--wavlm_root",
+        type=str,
+        default="",
+        help="Local WavLM source directory. Required only when --phase3_use_wavlm is enabled.",
+    )
+    p.add_argument(
+        "--wavlm_ckpt",
+        type=str,
+        default="",
+        help="Local WavLM checkpoint. Required only when --phase3_use_wavlm is enabled.",
+    )
     p.add_argument("--campplus_ckpt", type=str, default="/home/dgx/lkj/camplusplus/my_methods_GAN/pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin")
 
     p.add_argument("--resume", action="store_true", help="Resume training from checkpoint.")
@@ -225,6 +235,11 @@ def parse_args():
 def main():
     args = parse_args()
     apply_experiment_c_preset(args)
+    if args.phase3_use_wavlm and (not args.wavlm_root or not args.wavlm_ckpt):
+        raise ValueError(
+            "--phase3_use_wavlm requires both --wavlm_root and --wavlm_ckpt. "
+            "Omit --phase3_use_wavlm to train without WavLM distillation."
+        )
     train_main(args)
 
 

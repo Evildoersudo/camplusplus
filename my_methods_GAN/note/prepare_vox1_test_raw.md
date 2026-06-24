@@ -83,42 +83,44 @@ python3 /root/camplusplus/my_methods_GAN/scripts/prepare_vox1_test_raw.py --over
 先进行只读检查：
 
 ```bash
-cd /root/camplusplus
+cd /root/workspace/camplusplus
 
 python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
-  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
-  --test_trials /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
-  --output_root /root/autodl-tmp/SC_data/data/voxceleb1 \
+  --raw_root /root/rivermind-data/raw_data/vox1/train/wav \
+  --test_wav_root /root/rivermind-data/raw_data/vox1/test/wav \
+  --test_trials /root/rivermind-data/experiment_data_voxceleb/test_list/veri_test2.txt \
+  --output_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
-  --workers 8 \
+  --workers 16 \
   --dry_run
 ```
 
-当前数据的预期检查结果为 1,251 位总说话人、排除 40 位测试说话人、保留 1,211 位训练说话人和 148,642 条训练语音。
+当前数据已经拆分为 `train/wav` 和 `test/wav`。预期检查结果为：训练树 1,211 位说话人、148,642 条训练语音；测试树 40 位官方测试说话人、4,874 条测试语音；从训练树中需要额外排除的测试语音数为 0。
 
 确认统计正确后正式转码：
 
 ```bash
-cd /root/camplusplus
+cd /root/workspace/camplusplus
 
 python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
-  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
-  --test_trials /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
-  --output_root /root/autodl-tmp/SC_data/data/voxceleb1 \
+  --raw_root /root/rivermind-data/raw_data/vox1/train/wav \
+  --test_wav_root /root/rivermind-data/raw_data/vox1/test/wav \
+  --test_trials /root/rivermind-data/experiment_data_voxceleb/test_list/veri_test2.txt \
+  --output_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
-  --workers 8 \
+  --workers 16 \
   --overwrite
 ```
 
 输出目录为：
 
 ```text
-/root/autodl-tmp/SC_data/data/voxceleb1/clean_train_wav/
-/root/autodl-tmp/SC_data/data/voxceleb1/coded_train_opus_16k/
+/root/rivermind-data/experiment_data_voxceleb/train_data/opus/clean_train_wav/
+/root/rivermind-data/experiment_data_voxceleb/train_data/opus/coded_train_opus_16k/
 ```
 
 两边保持相同的 `说话人/视频/文件.wav` 相对路径，因此每条 clean 与 coded 音频严格一一对应。`--overwrite` 会重新生成已存在的目标文件；若希望断点续做并跳过已有文件，去掉该参数即可。

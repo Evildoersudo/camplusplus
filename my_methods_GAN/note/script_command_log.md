@@ -6,6 +6,12 @@ docker compose up -d
 docker compose exec camplusplus bash
 ```
 
+激活虚拟环境
+```bash
+eval "$(micromamba shell hook --shell=bash)"
+micromamba activate autodl-torch200-py38
+```
+
 ### 1.2 容器内验证
 
 先确认 `torch/torchaudio`：
@@ -310,13 +316,13 @@ Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
-  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_amr_q25  \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/vox1_pair_manifest_train_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/vox1_pair_manifest_valid_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expA_rec_only_opus_q25  \
   --phase1_epochs 10 \
   --phase2_epochs 0 \
   --phase3_epochs 0 \
-  --batch_size 24 \
+  --batch_size 22 \
   --num_workers 8 \
   --segment_seconds 4.0 \
   --train_sample_fraction 1.0 \
@@ -339,12 +345,11 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --mrstft_weight 1 \
   --complex_weight 1 \
   --valid_sv_metric \
-  --wavlm_root my_methods_GAN/pretrained/WavLM \
-  --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
-  --resume \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
   --device cuda
 ```
+--wavlm_root my_methods_GAN/pretrained/WavLM \
+--wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
 --resume \
 
 Experiment B（冻结 CAM++ teacher，使用可微 log-Mel 前端微调生成器）：
@@ -1085,12 +1090,12 @@ python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/prepare_cnceleb_truepair_data.py \
-  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
-  --output_root /root/autodl-tmp/SC_data/data/voxceleb1 \
+  --raw_root /root/rivermind-data/raw_data/vox1/train/wav \
+  --output_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
-  --workers 8 \
+  --workers 16 \
   --overwrite
 ```
 
@@ -1138,6 +1143,44 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
   --stratified \
   --seed 42
 ```
+
+VoxCeleb1 数据较大时，可先从已经生成的 clean 语音构建 clean-only manifest，再按 speaker 切分并抽样 1/4，最后只为该子集补 coded 语音：
+
+```bash
+python my_methods_GAN/scripts/build_clean_manifest.py \
+  --clean_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus/clean_train_wav \
+  --output_csv my_methods_GAN/exp/sv_codec_restore/vox1_clean_manifest_all.csv
+
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore/vox1_clean_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore/vox1_clean_train_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore/vox1_clean_valid_q25.csv \
+  --valid_ratio 0.1 \
+  --train_fraction 0.25 \
+  --valid_fraction 0.25 \
+  --stratified \
+  --seed 42
+```
+
+同时转码 1/4 train/valid 子集，并在转码完成后生成对应 pair manifest：
+
+```bash
+python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
+  --raw_root /root/rivermind-data/raw_data/vox1/train/wav \
+  --test_wav_root /root/rivermind-data/raw_data/vox1/test/wav \
+  --test_trials /root/rivermind-data/experiment_data_voxceleb/test_list/veri_test2.txt \
+  --output_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus \
+  --codec opus \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --workers 16 \
+  --include_manifest my_methods_GAN/exp/sv_codec_restore/vox1_clean_train_q25.csv \
+  --valid_include_manifest my_methods_GAN/exp/sv_codec_restore/vox1_clean_valid_q25.csv \
+  --train_pair_manifest my_methods_GAN/exp/sv_codec_restore/vox1_pair_manifest_train_q25.csv \
+  --valid_pair_manifest my_methods_GAN/exp/sv_codec_restore/vox1_pair_manifest_valid_q25.csv
+```
+
+`raw_root` 被删除时，脚本会自动从 `output_root/clean_train_wav` 进入 coded-only 续跑模式。已有且大小正常的 coded WAV 会跳过，0 字节残缺文件会自动重做。
 
 ## 8. 根据 trials 生成 eval clean/coded scp
 

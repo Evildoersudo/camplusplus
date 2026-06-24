@@ -55,7 +55,44 @@ def _parse_coded_roots(coded_roots: str | Path | list[str] | tuple[str, ...]) ->
     return roots
 
 
-def build_pair_manifest(clean_root: str | Path, coded_root: str | Path | list[str] | tuple[str, ...], output_csv: str | Path) -> int:
+def _load_include_relpaths(include_manifest: str | Path | None, clean_root: Path) -> set[str] | None:
+    if include_manifest is None:
+        return None
+    include_path = Path(include_manifest).resolve()
+    relpaths: set[str] = set()
+    with include_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError(f"Manifest has no header: {include_path}")
+        for row_number, row in enumerate(reader, 2):
+            path_text = row.get("rel_path") or row.get("clean_wav")
+            if not path_text:
+                raise ValueError(
+                    f"Manifest row {row_number} must contain rel_path or clean_wav"
+                )
+            path = Path(path_text)
+            if path.is_absolute():
+                try:
+                    relpaths.add(path.relative_to(clean_root).as_posix())
+                except ValueError:
+                    if len(path.parts) < 3:
+                        raise ValueError(
+                            f"Cannot infer id/video/file relative path from {path_text!r}"
+                        )
+                    relpaths.add(Path(*path.parts[-3:]).as_posix())
+            else:
+                relpaths.add(path.as_posix())
+    if not relpaths:
+        raise ValueError(f"No include rows found in {include_path}")
+    return relpaths
+
+
+def build_pair_manifest(
+    clean_root: str | Path,
+    coded_root: str | Path | list[str] | tuple[str, ...],
+    output_csv: str | Path,
+    include_manifest: str | Path | None = None,
+) -> int:
     clean_root = Path(clean_root).resolve()
     coded_roots = _parse_coded_roots(coded_root)
     output_csv = Path(output_csv).resolve()
@@ -63,8 +100,11 @@ def build_pair_manifest(clean_root: str | Path, coded_root: str | Path | list[st
 
     clean_idx = _build_rel_index(clean_root)
     coded_indexes = [_build_rel_index(root) for root in coded_roots]
+    include_relpaths = _load_include_relpaths(include_manifest, clean_root)
 
     rel_keys = sorted(clean_idx.keys())
+    if include_relpaths is not None:
+        rel_keys = [rel for rel in rel_keys if rel in include_relpaths]
 
     with output_csv.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
