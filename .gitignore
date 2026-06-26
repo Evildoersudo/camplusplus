@@ -70,3 +70,5 @@ temp/
 *.tmp
 *.wav
 *.opus
+*.ttf
+*.ttc

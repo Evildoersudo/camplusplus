@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build clean/coded true-paired VoxCeleb1 development training data.
+"""Build clean/coded true-paired training data.
 
-The VoxCeleb1 test speakers found in the official verification trials are
-always excluded, preventing train/test speaker leakage.
+For VoxCeleb1, pass --exclude_test_speakers with --test_trials to exclude
+official verification speakers and prevent train/test speaker leakage.
+For datasets such as LibriSpeech, leave it unset.
 """
 
 from __future__ import annotations
@@ -17,7 +18,14 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sv_codec_restore_gan.data.manifest import build_pair_manifest
+try:
+    from sv_codec_restore_gan.data.manifest import build_pair_manifest
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    data_dir = Path(__file__).resolve().parents[1] / "sv_codec_restore_gan" / "data"
+    sys.path.insert(0, str(data_dir))
+    from manifest import build_pair_manifest
 
 
 DEFAULT_WAV_ROOT = Path("/root/autodl-tmp/raw_data/vox1/train/wav")
@@ -30,8 +38,8 @@ DEFAULT_OUTPUT = Path("/root/autodl-tmp/SC_data/data/voxceleb1")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build clean/coded true-paired VoxCeleb1 training WAVs while "
-            "excluding all official test speakers."
+            "Build clean/coded true-paired training WAVs. VoxCeleb1 official "
+            "test-speaker exclusion is optional."
         )
     )
     parser.add_argument("--raw_root", type=Path, default=DEFAULT_WAV_ROOT)
@@ -39,7 +47,19 @@ def parse_args() -> argparse.Namespace:
         "--test_trials",
         type=Path,
         default=DEFAULT_TRIALS,
-        help="Official VoxCeleb trial list used to identify test speakers.",
+        help=(
+            "Official VoxCeleb trial list used to identify test speakers. "
+            "Only required when --exclude_test_speakers is set."
+        ),
+    )
+    parser.add_argument(
+        "--exclude_test_speakers",
+        "--exclude-test-speakers",
+        action="store_true",
+        help=(
+            "Exclude speakers found in --test_trials. Use this for VoxCeleb1; "
+            "leave unset for independent datasets such as LibriSpeech."
+        ),
     )
     parser.add_argument(
         "--test_wav_root",
@@ -47,8 +67,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Optional VoxCeleb test WAV root in id/video/*.wav layout. "
-            "Use this when --raw_root is already a pre-split training tree."
+            "Optional test WAV root in id/video/*.wav layout. Only used with "
+            "--exclude_test_speakers when --raw_root is already a pre-split "
+            "training tree."
         ),
     )
     parser.add_argument("--output_root", type=Path, default=DEFAULT_OUTPUT)
@@ -393,7 +414,7 @@ def write_pair_manifest(
 def main() -> int:
     args = parse_args()
     raw_root = args.raw_root.resolve()
-    trials_path = args.test_trials.resolve()
+    trials_path = args.test_trials.resolve() if args.test_trials else None
     test_wav_root = args.test_wav_root.resolve() if args.test_wav_root else None
     include_manifest = args.include_manifest.resolve() if args.include_manifest else None
     valid_include_manifest = (
@@ -425,13 +446,15 @@ def main() -> int:
 
     if not raw_root_exists and not clean_root_exists:
         raise FileNotFoundError(
-            f"Missing VoxCeleb WAV root: {raw_root}; also missing clean WAV "
+            f"Missing source WAV root: {raw_root}; also missing clean WAV "
             f"root for coded-only resume: {clean_root}"
         )
-    if not trials_path.is_file():
+    if args.exclude_test_speakers and (
+        trials_path is None or not trials_path.is_file()
+    ):
         raise FileNotFoundError(f"Missing official test trials: {trials_path}")
     if test_wav_root is not None and not test_wav_root.is_dir():
-        raise FileNotFoundError(f"Missing VoxCeleb test WAV root: {test_wav_root}")
+        raise FileNotFoundError(f"Missing test WAV root: {test_wav_root}")
     if include_manifest is not None and not include_manifest.is_file():
         raise FileNotFoundError(f"Missing include manifest: {include_manifest}")
     if valid_include_manifest is not None and not valid_include_manifest.is_file():
@@ -445,8 +468,10 @@ def main() -> int:
     if args.workers < 1:
         raise ValueError("--workers must be at least 1")
 
-    test_speakers = load_test_speakers(trials_path)
-    if test_wav_root is not None:
+    test_speakers = (
+        load_test_speakers(trials_path) if args.exclude_test_speakers else set()
+    )
+    if args.exclude_test_speakers and test_wav_root is not None:
         test_wavs = collect_wavs(test_wav_root)
         if not test_wavs:
             raise RuntimeError(f"No id/video/*.wav files found under {test_wav_root}")
@@ -477,15 +502,19 @@ def main() -> int:
         raw_root,
         "train",
     )
-    valid_wavs = select_wavs(
-        all_wavs,
-        source_root,
-        test_speakers,
-        valid_include_manifest,
-        clean_root,
-        raw_root,
-        "valid",
-    ) if valid_include_manifest is not None else []
+    valid_wavs = (
+        select_wavs(
+            all_wavs,
+            source_root,
+            test_speakers,
+            valid_include_manifest,
+            clean_root,
+            raw_root,
+            "valid",
+        )
+        if valid_include_manifest is not None
+        else []
+    )
 
     train_relpaths = {path.relative_to(source_root).as_posix() for path in train_wavs}
     valid_relpaths = {path.relative_to(source_root).as_posix() for path in valid_wavs}
@@ -503,7 +532,11 @@ def main() -> int:
         path.relative_to(source_root).parts[0] for path in valid_wavs
     }
 
-    if test_wav_root is None and overlap != test_speakers:
+    if (
+        args.exclude_test_speakers
+        and test_wav_root is None
+        and overlap != test_speakers
+    ):
         missing = sorted(test_speakers - all_speakers)
         raise RuntimeError(
             "Official test speakers do not exactly match the WAV tree; "
@@ -511,14 +544,18 @@ def main() -> int:
             "a pre-split training tree, pass --test_wav_root to validate the "
             "official test speakers separately."
         )
-    if train_speakers & test_speakers:
+    if args.exclude_test_speakers and train_speakers & test_speakers:
         raise RuntimeError("Train/test speaker leakage detected")
 
     print(f"Mode:                 {'coded-only resume' if coded_only else 'raw-to-clean-and-coded'}")
     print(f"Source root:          {source_root}")
     print(f"Source WAVs:          {len(all_wavs)}")
     print(f"All speakers:         {len(all_speakers)}")
-    if test_wav_root is not None:
+    if args.exclude_test_speakers:
+        print(f"Test trials:          {trials_path}")
+    else:
+        print("Test speaker filter:  disabled")
+    if args.exclude_test_speakers and test_wav_root is not None:
         print(f"Test WAV root:        {test_wav_root}")
         print(f"Test WAVs:            {len(test_wavs)}")
         print(f"Test tree speakers:   {len(test_tree_speakers)}")
