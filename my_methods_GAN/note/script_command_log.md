@@ -394,14 +394,14 @@ Experiment B2（按 GAN 改善第二版：关闭 AM-Softmax，启用 deep featur
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
-  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb\
-  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_007.pt \
+  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus_100.csv \
+  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus_100.csv \
+  --output_dir my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_100\
+  --init_generator_ckpt my_methods_GAN/exp/LibriSpeech_results/run_expA_rec_only_opus_Libri_100/best_generator_sv.pt \
   --phase1_epochs 0 \
-  --phase2_epochs 10 \
+  --phase2_epochs 20 \
   --phase3_epochs 0 \
-  --batch_size 22 \
+  --batch_size 24 \
   --num_workers 8 \
   --segment_seconds 4.0 \
   --phase2_segment_seconds 4.0 \
@@ -420,7 +420,7 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --no_use_spk_amsoftmax \
   --phase3_no_gan \
   --phase3_no_wavlm \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
   --device cuda
 ```
 
@@ -1144,17 +1144,102 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
   --seed 42
 ```
 
-VoxCeleb1 数据较大时，可先从已经生成的 clean 语音构建 clean-only manifest，再按 speaker 切分并抽样 1/4，最后只为该子集补 coded 语音：
+### 7.1 LibriSpeech Kaldi 风格声学增强
+
+脚本：my_methods_GAN/scripts/augment_librispeech_kaldi_style.py
+
+这个脚本会保持 LibriSpeech 原始目录组织格式：
+
+```text
+speaker_id/chapter_id/utterance_id.wav
+```
+
+每条输入语音只输出一条目标语音，比例为：
+
+```text
+clean 50%
+reverb-only 12.5%
+noise-only 12.5%
+music-only 12.5%
+babble-only 12.5%
+```
+
+默认设置：
+
+- RIR: `RIRS_NOISES/simulated_rirs/{smallroom,mediumroom}`，两类房间 1:1 随机
+- MUSAN noise SNR: `0,5,10,15`
+- MUSAN music SNR: `5,8,10,15`
+- MUSAN speech/babble SNR: `13,15,17,20`
+- babble 源数量：`3~7`
+- 输出：单声道 16 kHz PCM WAV，峰值限制到 `0.95`
+
+生成增强后的 LibriSpeech 目标语音：
+
+```bash
+python my_methods_GAN/scripts/augment_librispeech_kaldi_style.py \
+  --input_root my_methods_GAN/data/LibriSpeech/train-clean-100 \
+  --output_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --rir_root egs/3dspeaker/sv-cam++/data/raw_data/RIRS_NOISES \
+  --musan_root egs/3dspeaker/sv-cam++/data/raw_data/musan \
+  --metadata_csv my_methods_GAN/exp/LibriSpeech_results/LibriSpeech_100_kaldi_aug_metadata.csv \
+  --workers 16 \
+  --seed 42
+```
+
+先 dry-run 检查数量和资源路径：
+
+```bash
+python my_methods_GAN/scripts/augment_librispeech_kaldi_style.py \
+  --input_root my_methods_GAN/data/LibriSpeech/train-clean-100 \
+  --output_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --rir_root egs/3dspeaker/sv-cam++/data/raw_data/RIRS_NOISES \
+  --musan_root egs/3dspeaker/sv-cam++/data/raw_data/musan \
+  --workers 16 \
+  --seed 42 \
+  --dry_run
+```
+
+如果想使用稍微保守的 noise SNR：
+
+```bash
+python my_methods_GAN/scripts/augment_librispeech_kaldi_style.py \
+  --input_root my_methods_GAN/data/LibriSpeech/train-clean-100 \
+  --output_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug-conservative \
+  --rir_root egs/3dspeaker/sv-cam++/data/raw_data/RIRS_NOISES \
+  --musan_root egs/3dspeaker/sv-cam++/data/raw_data/musan \
+  --noise_snrs 5,10,15,20 \
+  --music_snrs 5,10,15,20 \
+  --workers 16 \
+  --seed 42
+```
+
+注意这里的训练目标是增强后的语音 `x_aug`。后续 codec 转码应该对
+`train-clean-100-kaldi-aug` 做：
+
+```text
+x_clean -> acoustic augmentation -> x_aug -> codec -> x_coded
+```
+
+训练 pair 为：
+
+```text
+input = x_coded
+target = x_aug
+```
+
+### 7.2 基于增强后的 LibriSpeech 构建 manifest 并转码
+
+可先从增强后的目标语音构建 clean-only manifest，再按 speaker 切分，最后为该子集补 coded 语音：
 
 ```bash
 python my_methods_GAN/scripts/build_clean_manifest.py \
-  --clean_root my_methods_GAN/data/LibriSpeech/train-clean-100 \
-  --output_csv my_methods_GAN/exp/LibriSpeech_results/LibriSpeech_100_clean_manifest_all.csv
+  --clean_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --output_csv my_methods_GAN/exp/LibriSpeech_results/LibriSpeech_100_kaldi_aug_manifest_all.csv
 
 python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
-  --input_manifest my_methods_GAN/exp/LibriSpeech_results/LibriSpeech_100_clean_manifest_all.csv \
-  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100.csv \
-  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100.csv \
+  --input_manifest my_methods_GAN/exp/LibriSpeech_results/LibriSpeech_100_kaldi_aug_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
+  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv \
   --valid_ratio 0.1 \
   --train_fraction 1 \
   --valid_fraction 1 \
@@ -1162,21 +1247,55 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
   --seed 42
 ```
 
-同时转码 train/valid 子集，并在转码完成后生成对应 pair manifest。LibriSpeech 与 VoxCeleb1
-说话人集合无关，因此这里不需要 `veri_test2.txt`，也不需要剔除 VoxCeleb1 测试说话人：
+同时转码 train/valid 子集。LibriSpeech 与 VoxCeleb1 说话人集合无关，因此这里不需要
+`veri_test2.txt`，也不需要剔除 VoxCeleb1 测试说话人。
+
+先生成 Opus 16k coded wav：
 
 ```bash
 python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
-  --raw_root my_methods_GAN/data/LibriSpeech/train-clean-100 \
-  --output_root my_methods_GAN/data/LibriSpeech/opus16-100 \
+  --raw_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --output_root my_methods_GAN/data/LibriSpeech/opus16-100-kaldi-aug \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
   --workers 16 \
-  --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100.csv \
-  --valid_include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100.csv \
-  --train_pair_manifest my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus_100.csv \
-  --valid_pair_manifest my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus_100.csv
+  --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
+  --valid_include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv
+```
+
+再生成 Opus 8k coded wav：
+
+```bash
+python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
+  --raw_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --output_root my_methods_GAN/data/LibriSpeech/opus8-100-kaldi-aug \
+  --codec opus \
+  --bitrate 8k \
+  --sample_rate 16000 \
+  --workers 16 \
+  --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
+  --valid_include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv
+```
+
+最后把 Opus 16k 和 Opus 8k 合并成训练/验证 pair manifest：
+
+```bash
+python my_methods_GAN/scripts/build_sv_codec_manifest.py \
+  --clean_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --coded_root \
+    my_methods_GAN/data/LibriSpeech/opus16-100-kaldi-aug/coded_train_opus_16k \
+    my_methods_GAN/data/LibriSpeech/opus8-100-kaldi-aug/coded_train_opus_8k \
+  --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
+  --output_csv my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus16_8_kaldi_aug.csv
+
+python my_methods_GAN/scripts/build_sv_codec_manifest.py \
+  --clean_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --coded_root \
+    my_methods_GAN/data/LibriSpeech/opus16-100-kaldi-aug/coded_train_opus_16k \
+    my_methods_GAN/data/LibriSpeech/opus8-100-kaldi-aug/coded_train_opus_8k \
+  --include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv \
+  --output_csv my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus16_8_kaldi_aug.csv
 ```
 
 如果以后处理 VoxCeleb1，并且需要按官方 verification trials 剔除测试说话人，再额外加上：

@@ -27,6 +27,10 @@ def _infer_spk_id(rel_path: str) -> str:
 
 def _infer_codec_type(path: Path) -> str:
     name = path.name.lower()
+    if "opus" in name and ("16k" in name or "16kbps" in name):
+        return "opus_16k"
+    if "opus" in name and ("8k" in name or "8kbps" in name):
+        return "opus_8k"
     if "amrwb" in name or "amr_wb" in name:
         return "amrwb"
     if "g711" in name and "mulaw" in name:

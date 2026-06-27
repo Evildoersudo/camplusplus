@@ -8,7 +8,14 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sv_codec_restore_gan.data.manifest import build_pair_manifest
+try:
+    from sv_codec_restore_gan.data.manifest import build_pair_manifest
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    data_dir = Path(__file__).resolve().parents[1] / "sv_codec_restore_gan" / "data"
+    sys.path.insert(0, str(data_dir))
+    from manifest import build_pair_manifest
 
 
 def parse_args():
