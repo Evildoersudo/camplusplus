@@ -4,6 +4,7 @@
 cd ~/lkj/camplusplus
 docker compose up -d
 docker compose exec camplusplus bash
+sudo chown -R dgx:dgx /home/dgx/lkj/camplusplus
 ```
 
 激活虚拟环境
@@ -316,9 +317,9 @@ Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus_100.csv \
-  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus_100.csv \
-  --output_dir my_methods_GAN/exp/LibriSpeech_results/run_expA_rec_only_opus_Libri_100  \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_pair_manifest_vox2_frac003_balanced.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_pair_manifest_vox2_frac003_balanced.csv \
+  --output_dir my_methods_GAN/exp/voxceleb2_results/run_expA_rec_only_opus16_vox2_003  \
   --phase1_epochs 10 \
   --phase2_epochs 0 \
   --phase3_epochs 0 \
@@ -394,15 +395,15 @@ Experiment B2（按 GAN 改善第二版：关闭 AM-Softmax，启用 deep featur
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus_100.csv \
-  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus_100.csv \
-  --output_dir my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_100\
-  --init_generator_ckpt my_methods_GAN/exp/LibriSpeech_results/run_expA_rec_only_opus_Libri_100/best_generator_sv.pt \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_pair_manifest_vox2_frac003_balanced.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_pair_manifest_vox2_frac003_balanced.csv \
+  --output_dir my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_vox2_003\
+  --init_generator_ckpt my_methods_GAN/exp/voxceleb2_results/run_expA_rec_only_opus16_vox2_003/best_generator.pt \
   --phase1_epochs 0 \
   --phase2_epochs 20 \
   --phase3_epochs 0 \
   --batch_size 24 \
-  --num_workers 8 \
+  --num_workers 16 \
   --segment_seconds 4.0 \
   --phase2_segment_seconds 4.0 \
   --lr_g_max 5e-5 \
@@ -414,9 +415,9 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --use_campplus_train_loss \
   --use_campplus_feat_loss \
   --campplus_feat_layers block2,out_nonlinear \
-  --campplus_feat_loss_weight 1 \
+  --campplus_feat_loss_weight 3 \
   --campplus_frontend diff_mel \
-  --spk_loss_weight 3 \
+  --spk_loss_weight 9 \
   --no_use_spk_amsoftmax \
   --phase3_no_gan \
   --phase3_no_wavlm \
@@ -427,12 +428,12 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
 **断点续训**
 ```
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/sv_codec_restore/train_manifest_opus_amrwb_q25.csv \
-  --valid_manifest my_methods_GAN/exp/sv_codec_restore/valid_manifest_opus_amrwb_q25.csv \
-  --output_dir my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb \
+  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus_100.csv \
+  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus_100.csv \
+  --output_dir my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100\
   --resume \
   --resume_use_current_phase_config \
-  --resume_ckpt my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/checkpoints/epoch_020.pt \
+  --resume_ckpt my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/checkpoints/epoch_010.pt \
   --emb_dim 48 \
   --num_blocks 5 \
   --hidden_units 100 \
@@ -440,8 +441,8 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --phase1_epochs 0 \
   --phase2_epochs 40 \
   --phase3_epochs 0 \
-  --batch_size 22 \
-  --num_workers 8 \
+  --batch_size 24 \
+  --num_workers 16 \
   --segment_seconds 4.0 \
   --phase2_segment_seconds 4.0 \
   --lr_g_max 5e-5 \
@@ -453,13 +454,14 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --use_campplus_train_loss \
   --use_campplus_feat_loss \
   --campplus_feat_layers block2,out_nonlinear \
-  --campplus_feat_loss_weight 1 \
+  --campplus_feat_loss_weight 20 \
   --campplus_frontend diff_mel \
-  --spk_loss_weight 3 \
+  --spk_loss_weight 60 \
   --no_use_spk_amsoftmax \
   --phase3_no_gan \
   --phase3_no_wavlm \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_cn_cnceleb_16k/campplus_cnceleb.bin \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --resume \
   --device cuda
 ```
 
@@ -727,40 +729,40 @@ python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
 
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
-  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_clean_official.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_coded_opus16k_official.scp \
-  --trials_file /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
+  --clean_wav_scp my_methods_GAN/exp/LibriSpeech_results/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/LibriSpeech_results/eval_coded_opus16k.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/vox1/test_lists/veri_test2.txt \
   --conditions clean,coded \
   --backend_type campplus \
   --backend_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore_vox/run_main/eval_results/opus16_official_clean_coded_campplus.json \
+  --output_json my_methods_GAN/exp/LibriSpeech_results/run_main/eval_results/opus16_coded_campplus.json \
   --use_cache \
   --cache_incremental \
   --cache_save_every 100 \
   --plain_loader_batch_size 64 \
   --plain_num_workers 4 \
   --plain_camp_batch_size 32 \
-  --cache_dir my_methods_GAN/exp/sv_codec_restore_vox/run_main/voxceleb/opus/official_emb_cache \
+  --cache_dir my_methods_GAN/exp/LibriSpeech_results/run_main/opus/emb_cache \
   --device cuda
 ```
 
 ```bash
 python my_methods_GAN/scripts/eval_sv_codec_restore_gan.py \
-  --clean_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_clean_official.scp \
-  --coded_wav_scp my_methods_GAN/exp/sv_codec_restore_vox/eval_coded_opus16k_official.scp \
-  --trials_file /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
+  --clean_wav_scp my_methods_GAN/exp/LibriSpeech_results/eval_clean.scp \
+  --coded_wav_scp my_methods_GAN/exp/LibriSpeech_results/eval_coded_opus16k.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/vox1/test_lists/veri_test2.txt \
   --conditions restored \
-  --generator_ckpt my_methods_GAN/exp/sv_codec_restore_cn/run_expB2_camp_feat_q25_opus16_8k/best_generator_sv.pt \
+  --generator_ckpt my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_16_libri_aug_100_temp/best_generator_sv.pt \
   --backend_type campplus \
   --backend_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
-  --output_json my_methods_GAN/exp/sv_codec_restore_vox/run_main/eval_results/opus16k+8k_en_16k.json \
+  --output_json my_methods_GAN/exp/LibriSpeech_results/run_main/eval_results/opus16k_libri100_aug.json \
   --restore_chunk_seconds 8 \
   --restore_overlap_seconds 0.1 \
-  --restore_chunk_batch_size 12 \
+  --restore_chunk_batch_size 32 \
   --use_cache \
   --cache_incremental \
-  --cache_save_every 100 \
-  --cache_dir /root/autodl-tmp/SC_data/run_main/voxceleb/opus/emb_cache \
+  --cache_save_every 200 \
+  --cache_dir my_methods_GAN/exp/LibriSpeech_results/run_main/opus/emb_cache \
   --device cuda
 ```
 ```
@@ -871,11 +873,11 @@ python my_methods_GAN/scripts/plot_train_avg_curve.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
-  --log_file my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/train.log \
+  --log_file my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/train.log \
   --phase phase2 \
-  --metrics spk_raw,spk_feat_raw \
-  --output_csv my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2spk_trend.csv \
-  --output_png my_methods_GAN/exp/sv_codec_restore/run_expB2_camp_feat_q25_spk_loss_opus_amrwb/epoch_phase2_spk_trend.png
+  --metrics spk_raw,spk_feat_raw,si_sdr,mrstft \
+  --output_csv my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/epoch_phase2spk_trend.csv \
+  --output_png my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/epoch_phase2_spk_trend.png
 ```
 
 说明：
@@ -986,8 +988,8 @@ python my_methods_GAN/scripts/eval_sv_coded_only_multi_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
-  --clean_root /root/autodl-tmp/SC_data/voxceleb_data_test_raw \
-  --coded_root /root/autodl-tmp/SC_data/data/voxceleb1/eval_coded_opus_16k \
+  --clean_root egs/3dspeaker/sv-cam++/data/raw_data/vox1/test/wav \
+  --coded_root my_methods_GAN/data/LibriSpeech/test_data/eval_coded_opus_16k \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
@@ -1021,11 +1023,11 @@ python my_methods_GAN/scripts/transcode_clean_wav_to_codec.py \
 
 ```bash
 python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
-  --trials_file /root/autodl-tmp/SC_data/data/voxceleb1/eval_clean/trials.lst \
-  --eval_clean_dir /root/autodl-tmp/SC_data/data/voxceleb1/eval_clean \
-  --eval_coded_dir /root/autodl-tmp/SC_data/data/voxceleb1/eval_coded_opus_16k \
-  --coded_scp_out my_methods_GAN/exp/sv_codec_restore_vox/eval_coded_opus16k.scp \
-  --clean_scp_out \
+  --trials_file egs/3dspeaker/sv-cam++/data/raw_data/vox1/test_lists/veri_test2.txt \
+  --eval_clean_dir egs/3dspeaker/sv-cam++/data/raw_data/vox1/test/wav \
+  --eval_coded_dir my_methods_GAN/data/LibriSpeech/test_data/eval_coded_opus_16k \
+  --coded_scp_out my_methods_GAN/exp/LibriSpeech_results/eval_coded_opus16k.scp \
+  --clean_scp_out my_methods_GAN/exp/LibriSpeech_results/eval_clean.scp \
   --strict
 
 python my_methods_GAN/scripts/make_cnceleb_eval_scp.py \
@@ -1186,6 +1188,20 @@ python my_methods_GAN/scripts/augment_librispeech_kaldi_style.py \
   --seed 42
 ```
 
+如果之前已经生成过该目录，建议加 `--overwrite` 或先删除旧目录，避免旧版本残留文件被跳过：
+
+```bash
+python my_methods_GAN/scripts/augment_librispeech_kaldi_style.py \
+  --input_root my_methods_GAN/data/LibriSpeech/train-clean-100 \
+  --output_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --rir_root egs/3dspeaker/sv-cam++/data/raw_data/RIRS_NOISES \
+  --musan_root egs/3dspeaker/sv-cam++/data/raw_data/musan \
+  --metadata_csv my_methods_GAN/exp/LibriSpeech_results/LibriSpeech_100_kaldi_aug_metadata.csv \
+  --workers 16 \
+  --seed 42 \
+  --overwrite
+```
+
 先 dry-run 检查数量和资源路径：
 
 ```bash
@@ -1254,14 +1270,14 @@ python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
 
 ```bash
 python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
-  --raw_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
-  --output_root my_methods_GAN/data/LibriSpeech/opus16-100-kaldi-aug \
+  --raw_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
+  --output_root my_methods_GAN/data/vox2/opus16_003 \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
   --workers 16 \
-  --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
-  --valid_include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv
+  --include_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac003_balanced.csv \
+  --valid_include_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac003_balanced.csv
 ```
 
 再生成 Opus 8k coded wav：
@@ -1282,20 +1298,18 @@ python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
 
 ```bash
 python my_methods_GAN/scripts/build_sv_codec_manifest.py \
-  --clean_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --clean_root my_methods_GAN/data/vox2/opus16_003/clean_train_wav \
   --coded_root \
-    my_methods_GAN/data/LibriSpeech/opus16-100-kaldi-aug/coded_train_opus_16k \
-    my_methods_GAN/data/LibriSpeech/opus8-100-kaldi-aug/coded_train_opus_8k \
-  --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
-  --output_csv my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus16_8_kaldi_aug.csv
+    my_methods_GAN/data/vox2/opus16_003/coded_train_opus_16k \
+  --include_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac003_balanced.csv \
+  --output_csv my_methods_GAN/exp/voxceleb2_results/train_pair_manifest_vox2_frac003_balanced.csv
 
 python my_methods_GAN/scripts/build_sv_codec_manifest.py \
-  --clean_root my_methods_GAN/data/LibriSpeech/train-clean-100-kaldi-aug \
+  --clean_root my_methods_GAN/data/vox2/opus16_003/clean_train_wav \
   --coded_root \
-    my_methods_GAN/data/LibriSpeech/opus16-100-kaldi-aug/coded_train_opus_16k \
-    my_methods_GAN/data/LibriSpeech/opus8-100-kaldi-aug/coded_train_opus_8k \
-  --include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv \
-  --output_csv my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus16_8_kaldi_aug.csv
+    my_methods_GAN/data/vox2/opus16_003/coded_train_opus_16k \
+  --include_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac003_balanced.csv \
+  --output_csv my_methods_GAN/exp/voxceleb2_results/valid_pair_manifest_vox2_frac003_balanced.csv
 ```
 
 如果以后处理 VoxCeleb1，并且需要按官方 verification trials 剔除测试说话人，再额外加上：
@@ -1686,3 +1700,141 @@ python my_methods_GAN/scripts/plot_clean_coded_restored_spectrogram.py \
 ```bash
 --colorbar_left 0.935 --colorbar_width 0.016
 ```
+
+## 17. VoxCeleb2 m4a 转 wav
+
+脚本：my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py
+
+源目录：
+
+```text
+egs/3dspeaker/sv-cam++/data/raw_data/vox2/dev/aac/id*/video/*.m4a
+```
+
+输出目录：
+
+```text
+egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav/id*/video/*.wav
+```
+
+先 dry-run 检查文件数量、源音频格式和目标路径：
+
+```bash
+python my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py \
+  --input_root egs/3dspeaker/sv-cam++/data/raw_data/vox2 \
+  --output_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
+  --dataset dev \
+  --workers 16 \
+  --dry_run
+```
+
+正式转换为单声道 16 kHz、16-bit PCM WAV：
+
+```bash
+python my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py \
+  --input_root egs/3dspeaker/sv-cam++/data/raw_data/vox2 \
+  --output_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
+  --dataset dev \
+  --sample_rate 16000 \
+  --channels 1 \
+  --pcm_codec pcm_s16le \
+  --workers 16 \
+  --strict
+```
+
+说明：VoxCeleb2 的 `.m4a` 是 AAC 压缩格式，本身没有 PCM 位深。为适配常见
+speaker verification/Kaldi 训练流程，脚本默认输出就是：
+
+```text
+16000 Hz
+mono
+pcm_s16le
+```
+
+如果想覆盖已有 wav，额外加 `--overwrite`：
+
+```bash
+python my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py \
+  --input_root egs/3dspeaker/sv-cam++/data/raw_data/vox2 \
+  --output_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
+  --dataset dev \
+  --sample_rate 16000 \
+  --channels 1 \
+  --pcm_codec pcm_s16le \
+  --workers 16 \
+  --strict \
+  --overwrite
+```
+
+## 18. VoxCeleb2 约 1/25 子集按 speaker 均衡切分
+
+VoxCeleb2 全量体积较大，例如 `vox2_wav` 约 257G。为了先验证模型方法有效性，可以只抽取约
+`1/25 = 0.04` 的训练规模。注意不要直接对所有 speaker 做行级 `train_fraction=0.04`，
+否则会保留大量 speaker，但每个 speaker 只剩很少语音，不利于说话人相关损失和验证。
+
+推荐做法：
+
+```text
+先筛掉语音太少的 speaker
+再只选一部分 speaker
+每个选中 speaker 保留固定上限的语音数
+最后按 speaker 切 train/valid
+```
+
+先从 VoxCeleb2 wav 目录构建 clean-only manifest：
+
+```bash
+python my_methods_GAN/scripts/build_clean_manifest.py \
+  --clean_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
+  --output_csv my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all.csv
+```
+
+再抽取约 1/25，并保持每个选中 speaker 至多 80 条语音：
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac004_balanced.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac004_balanced.csv \
+  --valid_ratio 0.1 \
+  --target_total_fraction 0.03 \
+  --min_rows_per_speaker 50 \
+  --max_rows_per_speaker 50 \
+  --seed 42
+```
+
+参数含义：
+
+```text
+--target_total_fraction 0.04   目标总量约为全量 1/25
+--min_rows_per_speaker 80      只从至少 80 条语音的 speaker 里选
+--max_rows_per_speaker 80      每个选中 speaker 最多保留 80 条
+--valid_ratio 0.1              speaker-level 验证集比例
+```
+
+如果你希望单个 speaker 的语音更多一些，例如每人最多 120 条，可以改成：
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac004_spk120.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac004_spk120.csv \
+  --valid_ratio 0.1 \
+  --target_total_fraction 0.04 \
+  --min_rows_per_speaker 120 \
+  --max_rows_per_speaker 120 \
+  --seed 42
+```
+
+脚本会打印：
+
+```text
+rows original=...
+selected_before_split=...
+speakers original=... eligible=... selected=...
+selected rows per speaker: min=... max=... avg=...
+train rows=...
+valid rows=...
+```
+
+用这些统计确认抽样规模和每个 speaker 的语音数是否符合预期。

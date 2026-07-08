@@ -115,6 +115,16 @@ def parse_args() -> argparse.Namespace:
         default=0.95,
         help="Final ffmpeg alimiter peak limit.",
     )
+    parser.add_argument(
+        "--min_output_rms",
+        "--min-output-rms",
+        type=float,
+        default=5.0,
+        help=(
+            "Minimum int16 RMS accepted for generated wavs. Existing files "
+            "below this value are regenerated; new files below it raise an error."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -301,22 +311,39 @@ def copy_clean(source: Path, destination: Path, sample_rate: int, peak_limit: fl
     )
 
 
-def wav_rms(path: Path) -> float:
+def wav_peak_and_rms(path: Path) -> tuple[int, float]:
     with wave.open(str(path), "rb") as handle:
         if handle.getnchannels() != 1 or handle.getsampwidth() != 2:
             raise ValueError(f"Expected mono 16-bit PCM WAV: {path}")
         frames = handle.readframes(handle.getnframes())
     if not frames:
-        return 1.0
+        return 0, 0.0
     total = 0
     count = 0
+    peak = 0
     for index in range(0, len(frames), 2):
         sample = int.from_bytes(frames[index : index + 2], "little", signed=True)
+        abs_sample = abs(sample)
+        peak = max(peak, abs_sample)
         total += sample * sample
         count += 1
     if count == 0:
-        return 1.0
-    return max(1.0, math.sqrt(total / count))
+        return 0, 0.0
+    return peak, math.sqrt(total / count)
+
+
+def wav_rms(path: Path) -> float:
+    _, rms = wav_peak_and_rms(path)
+    return max(1.0, rms)
+
+
+def assert_output_is_not_silent(path: Path, min_output_rms: float) -> None:
+    peak, rms = wav_peak_and_rms(path)
+    if rms < min_output_rms:
+        raise RuntimeError(
+            f"Generated wav is nearly silent: {path} peak={peak} rms={rms:.4f}. "
+            "Delete/regenerate this augmentation output."
+        )
 
 
 def normalize_rir(source: Path, destination: Path, sample_rate: int) -> None:
@@ -445,7 +472,7 @@ def apply_reverb(
             (
                 "[0:a]aformat=sample_fmts=fltp:channel_layouts=mono[sp];"
                 "[1:a]aformat=sample_fmts=fltp:channel_layouts=mono[rir];"
-                f"[sp][rir]afir=dry=0:wet=1,atrim=0:{duration:.3f},"
+                f"[sp][rir]afir,atrim=0:{duration:.3f},"
                 f"asetpts=N/SR/TB,alimiter=limit={peak_limit}[out]"
             ),
             "-map",
@@ -515,10 +542,14 @@ def process_task(
     sample_rate: int,
     seed: int,
     peak_limit: float,
+    min_output_rms: float,
     overwrite: bool,
 ) -> TaskResult:
     if task.output.exists() and task.output.stat().st_size > 44 and not overwrite:
-        return task_result(task, "", "", [], "")
+        _, existing_rms = wav_peak_and_rms(task.output)
+        if existing_rms >= min_output_rms:
+            return task_result(task, "", "", [], "")
+        task.output.unlink()
 
     task.output.parent.mkdir(parents=True, exist_ok=True)
     rng = stable_rng(seed, task.relative, task.aug_type)
@@ -592,6 +623,7 @@ def process_task(
         else:
             raise ValueError(f"Unsupported augmentation type: {task.aug_type}")
 
+    assert_output_is_not_silent(task.output, min_output_rms)
     return task_result(task, snr, num_noise_sources, noise_paths, rir_path)
 
 
@@ -765,6 +797,7 @@ def main() -> int:
                 args.sample_rate,
                 args.seed,
                 args.peak_limit,
+                args.min_output_rms,
                 args.overwrite,
             ): task
             for task in tasks
