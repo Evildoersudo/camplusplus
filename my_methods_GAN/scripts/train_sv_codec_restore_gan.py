@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
+
+import torch
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from sv_codec_restore_gan.data.dataset import SVCodecPairDataset
 from sv_codec_restore_gan.train.engine import train_main
+
+
+COMPRESSED_AUDIO_EXTENSIONS = {".aac", ".m4a", ".mp4", ".ogg", ".opus", ".webm"}
 
 
 def apply_experiment_c_preset(args: argparse.Namespace) -> None:
@@ -76,6 +83,24 @@ def parse_args():
 
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--num_workers", type=int, default=2)
+    p.add_argument(
+        "--log_interval",
+        type=int,
+        default=50,
+        help=(
+            "Print train step logs every N steps, plus step 1 and the last step. "
+            "Use 1 to print every step."
+        ),
+    )
+    p.add_argument(
+        "--audio_preflight_items",
+        type=int,
+        default=2,
+        help=(
+            "Before training, online-decode this many evenly spaced pairs from "
+            "each manifest. Compressed M4A/Opus files use FFmpeg. Set 0 to disable."
+        ),
+    )
     p.add_argument("--segment_seconds", type=float, default=2.0)
     p.add_argument("--phase2_segment_seconds", type=float, default=4.0)
     p.add_argument("--phase3_segment_seconds", type=float, default=4.0)
@@ -83,6 +108,33 @@ def parse_args():
     p.add_argument("--valid_sample_fraction", type=float, default=1.0, help="Fraction of valid manifest rows to use.")
     p.add_argument("--train_sample_seed", type=int, default=42, help="Random seed for train subset sampling.")
     p.add_argument("--valid_sample_seed", type=int, default=43, help="Random seed for valid subset sampling.")
+    p.add_argument(
+        "--clean_passthrough_ratio",
+        type=float,
+        default=None,
+        help=(
+            "Convenience alias for --train_clean_passthrough_ratio. "
+            "Adds clean->clean samples as this fraction of the final train dataset, e.g. 0.2 means 20%% clean."
+        ),
+    )
+    p.add_argument(
+        "--train_clean_passthrough_ratio",
+        type=float,
+        default=0.0,
+        help=(
+            "Add clean->clean passthrough samples to the train dataset. "
+            "The value is the desired clean fraction after mixing; 0.2 gives about codec:clean=8:2."
+        ),
+    )
+    p.add_argument(
+        "--valid_clean_passthrough_ratio",
+        type=float,
+        default=0.0,
+        help=(
+            "Add clean->clean passthrough samples to the validation dataset. "
+            "Default 0 keeps validation focused on codec restoration."
+        ),
+    )
     p.add_argument("--train_stratified_sample", action="store_true", help="Use speaker-stratified sampling for train subset.")
     p.add_argument("--no_train_stratified_sample", action="store_false", dest="train_stratified_sample", help="Disable speaker-stratified sampling for train subset.")
     p.add_argument("--valid_stratified_sample", action="store_true", help="Use speaker-stratified sampling for valid subset.")
@@ -93,6 +145,19 @@ def parse_args():
     p.add_argument("--num_blocks", type=int, default=6)
     p.add_argument("--hidden_units", type=int, default=128)
     p.add_argument("--attn_heads", type=int, default=4)
+    p.add_argument(
+        "--cws_mode",
+        type=str,
+        default="uniform",
+        choices=["uniform", "nonuniform"],
+        help="CWS frequency split mode. Default uniform keeps the original equal-width subbands.",
+    )
+    p.add_argument(
+        "--cws_band_edges",
+        type=str,
+        default="",
+        help="Comma-separated non-uniform CWS band edges, e.g. 0,64,160,257. Empty uses the default for --cws_mode.",
+    )
 
     p.add_argument("--lr_g_max", type=float, default=3e-4, help="Generator max learning rate for warmup-cosine schedule.")
     p.add_argument("--lr_g_min", type=float, default=1e-5, help="Generator minimum learning rate for cosine decay.")
@@ -107,6 +172,34 @@ def parse_args():
     p.add_argument("--mrstft_weight", type=float, default=1.0)
     p.add_argument("--complex_weight", type=float, default=0.5)
     p.add_argument("--rec_loss_weight", type=float, default=1.0)
+    p.add_argument(
+        "--clean_rec_loss_weight",
+        type=float,
+        default=1.0,
+        help=(
+            "When clean passthrough samples are present, optionally split codec/clean "
+            "reconstruction losses and multiply the clean->clean reconstruction term by this weight. "
+            "Default 1.0 preserves the legacy mixed-batch behavior unless clean-specific weights are set."
+        ),
+    )
+    p.add_argument(
+        "--clean_si_sdr_weight",
+        type=float,
+        default=None,
+        help="Optional SI-SDR weight used only for clean passthrough samples. Default: use --si_sdr_weight.",
+    )
+    p.add_argument(
+        "--clean_mrstft_weight",
+        type=float,
+        default=None,
+        help="Optional MR-STFT weight used only for clean passthrough samples. Default: use --mrstft_weight.",
+    )
+    p.add_argument(
+        "--clean_complex_weight",
+        type=float,
+        default=None,
+        help="Optional complex STFT L1 weight used only for clean passthrough samples. Default: use --complex_weight.",
+    )
     p.add_argument("--spk_loss_weight", type=float, default=5.0)
     p.add_argument("--campplus_feat_loss_weight", type=float, default=0.5)
     p.add_argument("--spk_cls_loss_weight", type=float, default=1.0)
@@ -130,6 +223,20 @@ def parse_args():
         action="store_false",
         dest="use_campplus_feat_loss",
         help="Disable CAMP++ deep feature L1 loss.",
+    )
+    p.add_argument(
+        "--codec_only_sv_loss",
+        action="store_true",
+        help=(
+            "When clean passthrough samples are mixed into training, compute CAMP++ "
+            "speaker/feature/AM-Softmax losses only on codec samples. Reconstruction loss still sees clean samples."
+        ),
+    )
+    p.add_argument(
+        "--no_codec_only_sv_loss",
+        action="store_false",
+        dest="codec_only_sv_loss",
+        help="Compute speaker losses on all samples, including clean passthrough samples.",
     )
     p.add_argument(
         "--campplus_feat_layers",
@@ -164,6 +271,7 @@ def parse_args():
         valid_sv_metric=True,
         use_spk_amsoftmax=False,
         use_campplus_feat_loss=True,
+        codec_only_sv_loss=False,
     )
 
     p.add_argument("--phase3_use_gan", action="store_true", help="Enable adversarial training in phase3.")
@@ -232,14 +340,97 @@ def parse_args():
     return p.parse_args()
 
 
+def _evenly_spaced_indices(length: int, count: int) -> list[int]:
+    if length <= 0 or count <= 0:
+        return []
+    count = min(length, count)
+    if count == 1:
+        return [0]
+    last = length - 1
+    return sorted({round(index * last / (count - 1)) for index in range(count)})
+
+
+def _run_audio_preflight(
+    manifest: str,
+    label: str,
+    item_count: int,
+    segment_seconds: float,
+) -> None:
+    dataset = SVCodecPairDataset(
+        manifest_csv=manifest,
+        segment_seconds=min(max(float(segment_seconds), 0.25), 1.0),
+        random_crop=False,
+        sample_fraction=1.0,
+        expand_multi_codec=True,
+    )
+    indices = _evenly_spaced_indices(len(dataset), item_count)
+    extensions: set[str] = set()
+    for index in indices:
+        row = dataset.rows[index]
+        paths = [row.clean_wav, *row.codec_wavs]
+        extensions.update(Path(path).suffix.lower() for path in paths)
+        item = dataset[index]
+        clean = item["clean"]
+        coded = item["coded"]
+        if clean.ndim != 1 or coded.ndim != 1:
+            raise RuntimeError(
+                f"{label} audio preflight expected 1-D mono tensors, "
+                f"got clean={tuple(clean.shape)} coded={tuple(coded.shape)}"
+            )
+        if clean.numel() == 0 or coded.numel() == 0:
+            raise RuntimeError(f"{label} audio preflight decoded an empty tensor: {row.utt_id}")
+        if clean.numel() != coded.numel():
+            raise RuntimeError(
+                f"{label} audio preflight length mismatch for {row.utt_id}: "
+                f"clean={clean.numel()} coded={coded.numel()}"
+            )
+        if not torch.isfinite(clean).all() or not torch.isfinite(coded).all():
+            raise RuntimeError(f"{label} audio preflight found NaN/Inf: {row.utt_id}")
+
+    ext_text = ",".join(sorted(extensions)) or "unknown"
+    print(
+        f"[audio] {label} online-decode preflight passed: "
+        f"items={len(indices)} extensions={ext_text} segment_samples="
+        f"{dataset.segment_len}"
+    )
+
+
+def run_audio_preflight(args: argparse.Namespace) -> None:
+    item_count = int(args.audio_preflight_items)
+    if item_count < 0:
+        raise ValueError("--audio_preflight_items must be at least 0")
+    if item_count == 0:
+        print("[audio] online-decode preflight disabled")
+        return
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "ffmpeg was not found in PATH. It is required for online M4A/Opus decoding."
+        )
+    _run_audio_preflight(
+        args.train_manifest,
+        "train",
+        item_count,
+        args.segment_seconds,
+    )
+    _run_audio_preflight(
+        args.valid_manifest,
+        "valid",
+        item_count,
+        args.segment_seconds,
+    )
+
+
 def main():
     args = parse_args()
+    if args.clean_passthrough_ratio is not None:
+        args.train_clean_passthrough_ratio = args.clean_passthrough_ratio
     apply_experiment_c_preset(args)
     if args.phase3_use_wavlm and (not args.wavlm_root or not args.wavlm_ckpt):
         raise ValueError(
             "--phase3_use_wavlm requires both --wavlm_root and --wavlm_ckpt. "
             "Omit --phase3_use_wavlm to train without WavLM distillation."
         )
+    run_audio_preflight(args)
     train_main(args)
 
 

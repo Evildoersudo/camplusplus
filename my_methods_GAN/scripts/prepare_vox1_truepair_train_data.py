@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import csv
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -93,6 +95,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--clean_write_mode",
+        "--clean-write-mode",
+        choices=("normalize", "copy", "hardlink", "symlink"),
+        default="normalize",
+        help=(
+            "How to create clean_train_wav when --raw_root is available. "
+            "'normalize' keeps the legacy FFmpeg 16 kHz mono PCM rewrite; "
+            "'copy', 'hardlink', or 'symlink' avoid clean->clean transcoding. "
+            "For VoxCeleb1 train/wav that is already 16 kHz mono WAV, "
+            "'hardlink' is usually fastest and uses no extra audio storage."
+        ),
+    )
     parser.add_argument(
         "--include_manifest",
         "--include-manifest",
@@ -238,6 +253,36 @@ def normalize_clean(
     )
 
 
+def write_clean(
+    source: Path,
+    destination: Path,
+    sample_rate: int,
+    overwrite: bool,
+    clean_write_mode: str,
+) -> None:
+    if destination.exists() or destination.is_symlink():
+        if not overwrite:
+            return
+        destination.unlink()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    if clean_write_mode == "normalize":
+        normalize_clean(source, destination, sample_rate, overwrite=True)
+    elif clean_write_mode == "copy":
+        shutil.copy2(source, destination)
+    elif clean_write_mode == "hardlink":
+        try:
+            os.link(source, destination)
+        except OSError:
+            # Hard links require source and destination to be on the same
+            # filesystem. Fall back to copy so long runs do not fail late.
+            shutil.copy2(source, destination)
+    elif clean_write_mode == "symlink":
+        destination.symlink_to(source)
+    else:
+        raise ValueError(f"Unsupported clean_write_mode: {clean_write_mode}")
+
+
 def build_codec_commands(
     clean_wav: Path,
     coded_wav: Path,
@@ -368,6 +413,7 @@ def build_tasks(
     overwrite: bool,
     codec: str,
     bitrate: str,
+    clean_write_mode: str,
 ) -> tuple[list[tuple], list[tuple]]:
     clean_tasks = []
     coded_tasks = []
@@ -376,7 +422,7 @@ def build_tasks(
         clean_wav = source if coded_only else clean_root / relative
         coded_wav = coded_root / relative
         if not coded_only:
-            clean_tasks.append((source, clean_wav, sample_rate, overwrite))
+            clean_tasks.append((source, clean_wav, sample_rate, overwrite, clean_write_mode))
         coded_tasks.append(
             (
                 clean_wav,
@@ -571,6 +617,8 @@ def main() -> int:
         print(f"Validation WAVs:      {len(valid_wavs)}")
         print(f"Validation speakers:  {len(valid_speakers)}")
     print(f"Clean output:         {clean_root}")
+    if not coded_only:
+        print(f"Clean write mode:     {args.clean_write_mode}")
     print(f"Coded output:         {coded_root}")
 
     if args.dry_run:
@@ -587,6 +635,7 @@ def main() -> int:
         args.overwrite,
         args.codec,
         args.bitrate,
+        args.clean_write_mode,
     )
     valid_clean_tasks, valid_coded_tasks = build_tasks(
         valid_wavs,
@@ -598,11 +647,12 @@ def main() -> int:
         args.overwrite,
         args.codec,
         args.bitrate,
+        args.clean_write_mode,
     )
 
     if not coded_only:
-        run_parallel(clean_tasks, normalize_clean, args.workers, "train clean")
-        run_parallel(valid_clean_tasks, normalize_clean, args.workers, "valid clean")
+        run_parallel(clean_tasks, write_clean, args.workers, "train clean")
+        run_parallel(valid_clean_tasks, write_clean, args.workers, "valid clean")
     run_parallel(coded_tasks, create_coded, args.workers, "train coded")
     run_parallel(valid_coded_tasks, create_coded, args.workers, "valid coded")
     write_pair_manifest(

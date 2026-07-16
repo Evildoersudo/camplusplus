@@ -86,13 +86,14 @@ python3 /root/camplusplus/my_methods_GAN/scripts/prepare_vox1_test_raw.py --over
 cd /root/workspace/camplusplus
 
 python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
-  --raw_root /root/rivermind-data/raw_data/vox1/train/wav \
-  --test_wav_root /root/rivermind-data/raw_data/vox1/test/wav \
-  --test_trials /root/rivermind-data/experiment_data_voxceleb/test_list/veri_test2.txt \
-  --output_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus \
+  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
+  --test_wav_root /root/autodl-tmp/raw_data/vox1/test/wav \
+  --test_trials /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
+  --output_root /root/autodl-tmp/raw_data/vox1_processed \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
+  --clean_write_mode hardlink \
   --workers 16 \
   --dry_run
 ```
@@ -105,16 +106,22 @@ python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
 cd /root/workspace/camplusplus
 
 python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
-  --raw_root /root/rivermind-data/raw_data/vox1/train/wav \
-  --test_wav_root /root/rivermind-data/raw_data/vox1/test/wav \
-  --test_trials /root/rivermind-data/experiment_data_voxceleb/test_list/veri_test2.txt \
-  --output_root /root/rivermind-data/experiment_data_voxceleb/train_data/opus \
+  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
+  --test_wav_root /root/autodl-tmp/raw_data/vox1/test/wav \
+  --test_trials /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
+  --output_root /root/autodl-tmp/raw_data/vox1_processed \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
+  --clean_write_mode hardlink \
   --workers 16 \
   --overwrite
 ```
+
+`--clean_write_mode hardlink` 表示 clean 输出不再经过 ffmpeg 重新转码，而是在
+`clean_train_wav` 中创建指向原始 VoxCeleb1 WAV 的硬链接；如果源目录和输出目录不在同一
+文件系统，脚本会自动退回到复制。若需要保持旧行为，可改回默认的
+`--clean_write_mode normalize`。
 
 输出目录为：
 

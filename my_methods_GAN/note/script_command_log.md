@@ -317,14 +317,16 @@ Experiment A（Rec-only baseline，去掉 GAN/WavLM/CAM++）：
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_pair_manifest_vox2_frac003_balanced.csv \
-  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_pair_manifest_vox2_frac003_balanced.csv \
-  --output_dir my_methods_GAN/exp/voxceleb2_results/run_expA_rec_only_opus16_vox2_003  \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_train_spksplit_opus16k.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_valid_spksplit_opus16k.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore_vox/run_expA_rec_opus16_vox1_002_cws  \
+  --cws_mode nonuniform \
+  --cws_band_edges 0,64,160,257 \
   --phase1_epochs 10 \
   --phase2_epochs 0 \
   --phase3_epochs 0 \
-  --batch_size 24 \
-  --num_workers 8 \
+  --batch_size 7 \
+  --num_workers 16 \
   --segment_seconds 4.0 \
   --train_sample_fraction 1.0 \
   --valid_sample_fraction 1.0 \
@@ -336,18 +338,19 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --attn_heads 4 \
   --lr_g_max 3e-4 \
   --lr_g_min 1e-4 \
-  --warmup_steps_g 0 \
+  --warmup_steps_g 200 \
   --si_sdr_weight 2 \
   --mrstft_weight 1 \
   --complex_weight 1 \
   --weight_decay 1e-4 \
-  --grad_clip 5.0 \
+  --grad_clip 30.0 \
   --si_sdr_weight 3 \
   --mrstft_weight 1 \
   --complex_weight 1 \
   --valid_sv_metric \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
-  --device cuda
+  --device cuda \
+  --log_interval 1 
 ```
 --wavlm_root my_methods_GAN/pretrained/WavLM \
 --wavlm_ckpt my_methods_GAN/pretrained/WavLM/WavLM-Base+.pt \
@@ -395,15 +398,56 @@ Experiment B2（按 GAN 改善第二版：关闭 AM-Softmax，启用 deep featur
 
 ```bash
 python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_pair_manifest_vox2_frac003_balanced.csv \
-  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_pair_manifest_vox2_frac003_balanced.csv \
-  --output_dir my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_vox2_003\
-  --init_generator_ckpt my_methods_GAN/exp/voxceleb2_results/run_expA_rec_only_opus16_vox2_003/best_generator.pt \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_train_pair_opus16k.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_valid_pair_opus16k.csv \
+  --output_dir my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_clean_vox2_0025 \
+  --init_generator_ckpt my_methods_GAN/exp/voxceleb2_results/run_expA_rec_opus16_clean_vox2_0025/best_generator.pt \
+  --clean_passthrough_ratio 0.2 \
   --phase1_epochs 0 \
   --phase2_epochs 20 \
   --phase3_epochs 0 \
-  --batch_size 24 \
+  --batch_size 7 \
   --num_workers 16 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 2000 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.0 \
+  --use_campplus_train_loss \
+  --use_campplus_feat_loss \
+  --campplus_feat_layers block2,out_nonlinear \
+  --campplus_feat_loss_weight 3 \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 9 \
+  --no_use_spk_amsoftmax \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --device cuda
+```
+
+**断点续训**
+``` bash
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_train_pair_opus16k.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_valid_pair_opus16k.csv \
+  --output_dir my_methods_GAN/exp/voxceleb2_results/sv_codec_restore_vox2/run_expB_opus16_vox2_008 \
+  --resume \
+  --resume_use_current_phase_config \
+  --resume_ckpt my_methods_GAN/exp/voxceleb2_results/sv_codec_restore_vox2/run_expB_opus16_vox2_008/epoch_009.pt \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --phase1_epochs 0 \
+  --phase2_epochs 40 \
+  --phase3_epochs 0 \
+  --batch_size 7 \
+  --num_workers 16 \
+  --audio_preflight_items 2 \
   --segment_seconds 4.0 \
   --phase2_segment_seconds 4.0 \
   --lr_g_max 5e-5 \
@@ -422,46 +466,6 @@ python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
   --phase3_no_gan \
   --phase3_no_wavlm \
   --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
-  --device cuda
-```
-
-**断点续训**
-```
-python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
-  --train_manifest my_methods_GAN/exp/LibriSpeech_results/train_pair_manifest_opus_100.csv \
-  --valid_manifest my_methods_GAN/exp/LibriSpeech_results/valid_pair_manifest_opus_100.csv \
-  --output_dir my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100\
-  --resume \
-  --resume_use_current_phase_config \
-  --resume_ckpt my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/checkpoints/epoch_010.pt \
-  --emb_dim 48 \
-  --num_blocks 5 \
-  --hidden_units 100 \
-  --attn_heads 4 \
-  --phase1_epochs 0 \
-  --phase2_epochs 40 \
-  --phase3_epochs 0 \
-  --batch_size 24 \
-  --num_workers 16 \
-  --segment_seconds 4.0 \
-  --phase2_segment_seconds 4.0 \
-  --lr_g_max 5e-5 \
-  --lr_g_min 1e-5 \
-  --warmup_steps_g 0 \
-  --si_sdr_weight 1.0 \
-  --mrstft_weight 0.5 \
-  --complex_weight 0.0 \
-  --use_campplus_train_loss \
-  --use_campplus_feat_loss \
-  --campplus_feat_layers block2,out_nonlinear \
-  --campplus_feat_loss_weight 20 \
-  --campplus_frontend diff_mel \
-  --spk_loss_weight 60 \
-  --no_use_spk_amsoftmax \
-  --phase3_no_gan \
-  --phase3_no_wavlm \
-  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
-  --resume \
   --device cuda
 ```
 
@@ -873,11 +877,11 @@ python my_methods_GAN/scripts/plot_train_avg_curve.py \
 
 ```bash
 python my_methods_GAN/scripts/plot_epoch_spk_trend.py \
-  --log_file my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/train.log \
+  --log_file my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_clean_vox2_0025/train.log \
   --phase phase2 \
   --metrics spk_raw,spk_feat_raw,si_sdr,mrstft \
-  --output_csv my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/epoch_phase2spk_trend.csv \
-  --output_png my_methods_GAN/exp/LibriSpeech_results/run_expB_opus_libri_clean_93_100/epoch_phase2_spk_trend.png
+  --output_csv my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_clean_vox2_0025/epoch_phase2spk_trend.csv \
+  --output_png my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_clean_vox2_0025/epoch_phase2_spk_trend.png
 ```
 
 说明：
@@ -1275,6 +1279,7 @@ python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
   --codec opus \
   --bitrate 16k \
   --sample_rate 16000 \
+  --clean_write_mode hardlink \
   --workers 16 \
   --include_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac003_balanced.csv \
   --valid_include_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac003_balanced.csv
@@ -1289,10 +1294,15 @@ python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
   --codec opus \
   --bitrate 8k \
   --sample_rate 16000 \
+  --clean_write_mode hardlink \
   --workers 16 \
   --include_manifest my_methods_GAN/exp/LibriSpeech_results/train_manifest_opus_100_kaldi_aug.csv \
   --valid_include_manifest my_methods_GAN/exp/LibriSpeech_results/valid_manifest_opus_100_kaldi_aug.csv
 ```
+
+`--clean_write_mode hardlink` 会让 `clean_train_wav` 直接硬链接到源 WAV，避免
+clean 语音再次经过 ffmpeg 转成 clean。若源目录和输出目录不在同一文件系统，脚本会自动
+退回到复制；需要旧的重采样/单声道标准化行为时，使用默认 `--clean_write_mode normalize`。
 
 最后把 Opus 16k 和 Opus 8k 合并成训练/验证 pair manifest：
 
@@ -1701,140 +1711,585 @@ python my_methods_GAN/scripts/plot_clean_coded_restored_spectrogram.py \
 --colorbar_left 0.935 --colorbar_width 0.016
 ```
 
-## 17. VoxCeleb2 m4a 转 wav
+## 17. VoxCeleb2 保留 M4A，按 speaker/video 均衡抽取一半
 
-脚本：my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py
+为了避免把 VoxCeleb2 全量转换成约 257G 的 WAV，clean/reference 直接保留原始 AAC
+`.m4a`。训练 Dataset 会调用 FFmpeg，将 M4A 和 Opus 在线解码成 16 kHz 单声道
+float Tensor。
 
-源目录：
-
-```text
-egs/3dspeaker/sv-cam++/data/raw_data/vox2/dev/aac/id*/video/*.m4a
-```
-
-输出目录：
+源目录应为：
 
 ```text
-egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav/id*/video/*.wav
+/root/autodl-tmp/vox2/dev/aac/id*/video/*.m4a
 ```
 
-先 dry-run 检查文件数量、源音频格式和目标路径：
+先扫描全量 M4A，生成 clean-only manifest。这个过程只写 CSV，不复制或解码音频：
 
 ```bash
-python my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py \
-  --input_root egs/3dspeaker/sv-cam++/data/raw_data/vox2 \
-  --output_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
-  --dataset dev \
-  --workers 16 \
-  --dry_run
-```
+cd /root/camplusplus
 
-正式转换为单声道 16 kHz、16-bit PCM WAV：
-
-```bash
-python my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py \
-  --input_root egs/3dspeaker/sv-cam++/data/raw_data/vox2 \
-  --output_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
-  --dataset dev \
-  --sample_rate 16000 \
-  --channels 1 \
-  --pcm_codec pcm_s16le \
-  --workers 16 \
-  --strict
-```
-
-说明：VoxCeleb2 的 `.m4a` 是 AAC 压缩格式，本身没有 PCM 位深。为适配常见
-speaker verification/Kaldi 训练流程，脚本默认输出就是：
-
-```text
-16000 Hz
-mono
-pcm_s16le
-```
-
-如果想覆盖已有 wav，额外加 `--overwrite`：
-
-```bash
-python my_methods_GAN/scripts/convert_vox2_m4a_to_wav.py \
-  --input_root egs/3dspeaker/sv-cam++/data/raw_data/vox2 \
-  --output_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
-  --dataset dev \
-  --sample_rate 16000 \
-  --channels 1 \
-  --pcm_codec pcm_s16le \
-  --workers 16 \
-  --strict \
-  --overwrite
-```
-
-## 18. VoxCeleb2 约 1/25 子集按 speaker 均衡切分
-
-VoxCeleb2 全量体积较大，例如 `vox2_wav` 约 257G。为了先验证模型方法有效性，可以只抽取约
-`1/25 = 0.04` 的训练规模。注意不要直接对所有 speaker 做行级 `train_fraction=0.04`，
-否则会保留大量 speaker，但每个 speaker 只剩很少语音，不利于说话人相关损失和验证。
-
-推荐做法：
-
-```text
-先筛掉语音太少的 speaker
-再只选一部分 speaker
-每个选中 speaker 保留固定上限的语音数
-最后按 speaker 切 train/valid
-```
-
-先从 VoxCeleb2 wav 目录构建 clean-only manifest：
-
-```bash
 python my_methods_GAN/scripts/build_clean_manifest.py \
-  --clean_root egs/3dspeaker/sv-cam++/data/raw_data/vox2_wav/wav \
-  --output_csv my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all.csv
+  --clean_root /root/autodl-tmp/vox2/dev/aac \
+  --extensions .m4a \
+  --output_csv my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all_m4a.csv
 ```
 
-再抽取约 1/25，并保持每个选中 speaker 至多 80 条语音：
+按每位 speaker 抽取约 50%，并在该 speaker 的不同 video/session 之间轮流取样：
+
+```bash
+python my_methods_GAN/scripts/sample_vox2_manifest.py \
+  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all_m4a.csv \
+  --output_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_half_m4a.csv \
+  --fraction 0.5 \
+  --min_keep_per_speaker 1 \
+  --seed 42
+```
+
+这里的“一半”只体现在 manifest 中，不会删除原始 M4A，也不会额外占用一份音频空间。
+脚本会报告总行数、保留 speaker 数量、每位 speaker 的保留行数以及覆盖的 video 数量。
+
+如果磁盘空间要求必须物理删除另外一半 M4A，先执行 dry-run。脚本会确认 half manifest
+中的每个文件都实际存在，并统计预计删除的文件数与空间：
+
+```bash
+python my_methods_GAN/scripts/prune_audio_by_manifest.py \
+  --audio_root /root/autodl-tmp/vox2/dev/aac \
+  --keep_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_half_m4a.csv \
+  --extensions .m4a
+```
+
+确认 `Files to keep`、`Files to delete` 和空间统计正确后，才执行永久删除：
+
+```bash
+python my_methods_GAN/scripts/prune_audio_by_manifest.py \
+  --audio_root /root/autodl-tmp/vox2/dev/aac \
+  --keep_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_half_m4a.csv \
+  --extensions .m4a \
+  --delete \
+  --remove_empty_dirs
+```
+
+默认会在 half manifest 旁生成
+`vox2_clean_manifest_half_m4a.csv.deleted_files.txt`，记录所有被删除路径。删除不可恢复，
+因此必须保留好 half manifest；脚本中断后可以用相同命令继续，已删除文件不会被重复处理。
+
+## 18. 从半量 M4A 再切训练子集，只为选中语音生成 Opus
+
+### 18.1 从半量集取约原始全量的 1/25
+
+半量 manifest 已经约等于原始全量的 `0.5`。如果最终实验子集希望约为原始全量的
+`1/25 = 0.04`，则需要从半量 manifest 再取：
+
+```text
+0.04 / 0.5 = 0.08
+```
+
+下面命令从符合条件的 speaker 中选取约 8% 行，每位选中 speaker 最多保留 50 条，
+然后执行 speaker-level train/valid 切分：
 
 ```bash
 python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
-  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all.csv \
-  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac004_balanced.csv \
-  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac004_balanced.csv \
+  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_half_m4a.csv \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_train_clean_m4a.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_valid_clean_m4a.csv \
   --valid_ratio 0.1 \
-  --target_total_fraction 0.03 \
+  --target_total_fraction 0.08 \
   --min_rows_per_speaker 50 \
   --max_rows_per_speaker 50 \
   --seed 42
 ```
 
-参数含义：
-
-```text
---target_total_fraction 0.04   目标总量约为全量 1/25
---min_rows_per_speaker 80      只从至少 80 条语音的 speaker 里选
---max_rows_per_speaker 80      每个选中 speaker 最多保留 80 条
---valid_ratio 0.1              speaker-level 验证集比例
-```
-
-如果你希望单个 speaker 的语音更多一些，例如每人最多 120 条，可以改成：
+如果要使用完整的“半量数据集”训练，不再缩小 speaker 集合，则去掉
+`--target_total_fraction`、`--min_rows_per_speaker` 和 `--max_rows_per_speaker`：
 
 ```bash
 python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
-  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_all.csv \
-  --train_manifest my_methods_GAN/exp/voxceleb2_results/train_manifest_vox2_frac004_spk120.csv \
-  --valid_manifest my_methods_GAN/exp/voxceleb2_results/valid_manifest_vox2_frac004_spk120.csv \
+  --input_manifest my_methods_GAN/exp/voxceleb2_results/vox2_clean_manifest_half_m4a.csv \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_half_train_clean_m4a.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_half_valid_clean_m4a.csv \
   --valid_ratio 0.1 \
-  --target_total_fraction 0.04 \
-  --min_rows_per_speaker 120 \
-  --max_rows_per_speaker 120 \
   --seed 42
 ```
 
-脚本会打印：
+### 18.2 dry-run：确认只会转码最终选中的语音
 
-```text
-rows original=...
-selected_before_split=...
-speakers original=... eligible=... selected=...
-selected rows per speaker: min=... max=... avg=...
-train rows=...
-valid rows=...
+Opus 使用 `.opus` 容器；不要将 Opus 文件命名为 `.m4a`。下面以约 1/25 子集为例：
+
+```bash
+python my_methods_GAN/scripts/convert_vox2_manifest_to_opus.py \
+  --input_manifests \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac004_train_clean_m4a.csv \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac004_valid_clean_m4a.csv \
+  --pair_manifests_out \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac004_train_pair_opus16k.csv \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac004_valid_pair_opus16k.csv \
+  --output_root /root/autodl-tmp/vox2_opus_16k \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --channels 1 \
+  --workers 16 \
+  --strict \
+  --dry_run
 ```
 
-用这些统计确认抽样规模和每个 speaker 的语音数是否符合预期。
+### 18.3 正式生成 Opus 和训练 pair manifest
+
+确认 dry-run 的 `Selected utterances` 和 `Unique Opus outputs` 正确后，去掉
+`--dry_run`：
+
+```bash
+python my_methods_GAN/scripts/convert_vox2_manifest_to_opus.py \
+  --input_manifests \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_train_clean_m4a.csv \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_valid_clean_m4a.csv \
+  --pair_manifests_out \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_train_pair_opus16k.csv \
+    my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_valid_pair_opus16k.csv \
+  --output_root /root/autodl-tmp/vox2_opus_16k \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --channels 1 \
+  --workers 16 \
+  --strict
+```
+
+输出 pair manifest 格式为：
+
+```text
+utt_id,spk_id,clean_wav,codec_wav,codec_type
+id00001-video-00001,id00001,/.../00001.m4a,/.../00001.opus,opus
+```
+
+训练时直接使用这两个 pair manifest：
+
+```bash
+--train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_train_pair_opus16k.csv
+--valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_valid_pair_opus16k.csv
+--num_workers 8
+--audio_preflight_items 2
+```
+
+Dataset 对 `.m4a/.opus` 使用 FFmpeg 在线解码并统一为 16 kHz、单声道。在线解码会增加
+CPU 负担，建议先使用 `--num_workers 8`；如果 GPU 经常等待数据，再逐步提高 workers。
+`train_sv_codec_restore_gan.py` 默认会在训练开始前从 train/valid 各抽取 2 对音频，
+沿实际 Dataset 路径执行在线解码预检，并输出：
+
+```text
+[audio] train online-decode preflight passed: items=2 extensions=.m4a,.opus ...
+[audio] valid online-decode preflight passed: items=2 extensions=.m4a,.opus ...
+```
+
+该预检通过后，正式训练批次也会由 DataLoader workers 在线解码。只有排查启动耗时时才建议
+使用 `--audio_preflight_items 0` 关闭预检。
+
+转码进程中断后直接重新执行原命令即可：默认跳过已有非空 Opus；只有需要重做已有文件时
+才添加 `--overwrite`。转码脚本中的 `--strict` 默认在完成后均匀抽查 100 个输出，而不是
+对数万条文件逐一执行 ffprobe；如需检查全部输出可额外设置 `--strict_samples 0`。
+
+## 19. Step1：clean passthrough 对照训练
+
+目的：在不修改生成器网络结构、不加入门控机制的情况下，先验证 `clean→clean` 数据是否能缓解
+clean 输入经过模型后的说话人识别指标退化。
+
+本阶段仍然使用原始生成器结构：
+
+```text
+x_out = x_in + R(x)
+```
+
+新增基础训练参数：
+
+```text
+--clean_passthrough_ratio 0.1
+```
+
+等价于：
+
+```text
+--train_clean_passthrough_ratio 0.1
+--valid_clean_passthrough_ratio 0.0
+```
+
+含义：训练集中最终约 10% 样本为 `clean→clean`，90% 样本仍为 codec 修复样本。验证集默认不混入
+clean passthrough，以免 codec restoration 验证指标被 clean 样本稀释。
+
+注意：直接使用 `--clean_passthrough_ratio 0.2` 且 clean/code 同权训练，容易把模型推向
+identity 映射，导致 restored 相对 coded 指标变差；同时 clean 样本上的 SI-SDR 可能产生很大的
+裁剪前梯度。因此当前推荐使用“保护式 clean passthrough”：
+
+```text
+--clean_rec_loss_weight 0.1      clean 重建项降权，只做轻量 identity 约束
+--clean_si_sdr_weight 0.0        clean 样本不使用 SI-SDR，避免梯度尖峰
+--clean_mrstft_weight 0.5        clean 样本保留轻量频谱约束
+--clean_complex_weight 0.0       clean 样本不使用 complex STFT L1
+--codec_only_sv_loss             CAMP++ speaker/feature loss 只在 codec 样本上计算
+```
+
+训练开始时日志会打印样本组成，例如：
+
+```text
+[data] sample_types train=[clean=...,codec=...] valid=[codec=...] clean_passthrough_ratio train=0.1 valid=0.0
+[config] clean_passthrough: train_ratio=0.1 ... clean_rec_weight=0.1 clean_si_sdr_weight=0.0 ... codec_only_sv_loss=True
+```
+
+新的训练日志会同时打印裁剪前和裁剪后梯度范数：
+
+```text
+generator_grad_norm_pre_clip=...
+generator_grad_norm_post_clip=...
+```
+
+`pre_clip` 大表示 loss 梯度尖锐，`post_clip` 才是实际进入 optimizer step 前的梯度范数。
+如果 `post_clip` 长期等于 `--grad_clip`，说明几乎每一步都被裁剪，阈值过低或 loss 权重过大。
+在 VoxCeleb2 4s、CAM++ teacher 微调中，裁剪前全局梯度范数常见在 15～35 附近，因此建议
+`--grad_clip 30.0`，让裁剪只处理尖峰，而不是每一步都把梯度压到 5。
+
+### 19.1 VoxCeleb2 Opus16k Step1 训练命令
+
+下面命令基于已有 Opus16k pair manifest，加入 10% clean passthrough 样本，并对 clean loss
+降权，避免影响 codec 修复能力：
+
+```bash
+cd /root/camplusplus
+
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_train_pair_opus16k.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac004_valid_pair_opus16k.csv \
+  --output_dir my_methods_GAN/exp/voxceleb2_results/sv_codec_restore_vox2/run_step1_clean_passthrough_safe_opus16 \
+  --clean_passthrough_ratio 0.1 \
+  --clean_rec_loss_weight 0.1 \
+  --clean_si_sdr_weight 0.0 \
+  --clean_mrstft_weight 0.5 \
+  --clean_complex_weight 0.0 \
+  --codec_only_sv_loss \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --phase1_epochs 0 \
+  --phase2_epochs 40 \
+  --phase3_epochs 0 \
+  --batch_size 4 \
+  --num_workers 16 \
+  --audio_preflight_items 2 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 0 \
+  --grad_clip 30.0 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.0 \
+  --use_campplus_train_loss \
+  --use_campplus_feat_loss \
+  --campplus_feat_layers block2,out_nonlinear \
+  --campplus_feat_loss_weight 3 \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 9 \
+  --no_use_spk_amsoftmax \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --device cuda
+```
+
+如果要从已有 checkpoint 继续做 Step1 对照训练，则增加：
+
+```bash
+  --resume \
+  --resume_use_current_phase_config \
+  --resume_ckpt my_methods_GAN/exp/voxceleb2_results/sv_codec_restore_vox2/run_expB_opus16_vox2_008/checkpoints/epoch_009.pt
+```
+
+注意：
+
+```text
+1. 当前 Step1 不会修改 generator.py，也不会启用 gate；
+2. clean passthrough 样本在 Dataset 内部生成，不需要额外生成新的 manifest；
+3. clean 样本的 coded 输入直接等于 clean 语音，不会再经过 Opus 或 FFmpeg 转码；
+4. clean 样本只做轻量 identity 约束，不再与 codec 样本同权竞争；
+5. 如果 4 秒、batch_size=4 仍然 OOM，则优先降到 --batch_size 3 或 2。
+```
+
+### 19.2 当前 VoxCeleb2 frac0025 安全版续训命令
+
+针对 `run_expA_rec_opus16_clean_vox2_0025` / `run_expB_opus16_clean_vox2_0025` 中观察到的
+裁剪前梯度过大、restored 相对 coded 变差问题，不建议继续使用同权 `--clean_passthrough_ratio 0.2`。
+建议新开一个输出目录，用 10% clean passthrough + clean 降权：
+
+```bash
+cd /root/camplusplus
+
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_train_pair_opus16k.csv \
+  --valid_manifest my_methods_GAN/exp/voxceleb2_results/vox2_frac0025_valid_pair_opus16k.csv \
+  --output_dir my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_clean_vox2_0025_safe_cleanpt \
+  --init_generator_ckpt my_methods_GAN/exp/voxceleb2_results/run_expB_opus16_vox2_003/best_generator_sv.pt \
+  --clean_passthrough_ratio 0.2 \
+  --clean_rec_loss_weight 1 \
+  --clean_si_sdr_weight 0.0 \
+  --clean_mrstft_weight 0.5 \
+  --clean_complex_weight 0.0 \
+  --codec_only_sv_loss \
+  --phase1_epochs 0 \
+  --phase2_epochs 20 \
+  --phase3_epochs 0 \
+  --batch_size 7 \
+  --num_workers 16 \
+  --audio_preflight_items 2 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 5e-5 \
+  --lr_g_min 1e-5 \
+  --warmup_steps_g 1000 \
+  --grad_clip 30.0 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.0 \
+  --use_campplus_train_loss \
+  --use_campplus_feat_loss \
+  --campplus_feat_layers block2,out_nonlinear \
+  --campplus_feat_loss_weight 3 \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 9 \
+  --no_use_spk_amsoftmax \
+  --phase3_no_gan \
+  --phase3_no_wavlm \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --device cuda
+```
+
+如果仍然发现 restored 相对 coded 变差，下一轮优先继续减小 clean 影响，而不是加大 clean 比例：
+
+```text
+--clean_passthrough_ratio 0.05
+--clean_rec_loss_weight 0.05
+```
+
+如果日志里仍然出现：
+
+```text
+generator_grad_norm_post_clip=3.000e+01
+```
+
+并且几乎每一步都是 30，说明 `--grad_clip 30.0` 仍然太低或 loss 过强。下一轮优先降低：
+
+```text
+--spk_loss_weight 6
+--campplus_feat_loss_weight 2
+```
+
+## 20. 非均匀 CWS 子带分割实验
+
+目标：只验证 CWS 频带划分是否能提升 coded 语音修复能力，不加入 gate、artifact encoder 或 mag confidence。
+
+新增训练参数：
+
+```text
+--cws_mode uniform                 默认，保持原来的均匀 CWS
+--cws_mode nonuniform              启用非均匀 CWS
+--cws_band_edges 0,64,160,257      3 个子带：[0:64], [64:160], [160:257]
+```
+
+说明：
+
+```text
+n_fft=512 时，STFT 频点数 F = 257
+bin resolution = 16000 / 512 = 31.25 Hz
+0:64      约 0~2 kHz
+64:160    约 2~5 kHz
+160:257   约 5~8 kHz
+```
+
+默认不加参数时仍然是旧的均匀 CWS。启用非均匀 CWS 时，模型参数形状不变，旧 checkpoint 可以加载，但每个 CWS channel 对应的频带语义会变化，所以建议只做小学习率 finetune，不要直接拿旧 checkpoint 评测。
+
+### 20.1 VoxCeleb1 非均匀 CWS phase1 小学习率 finetune
+
+示例命令：
+
+```bash
+cd /root/camplusplus
+
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_train_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_valid_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore_vox/run_expA_nonuniform_cws_opus_q25 \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore_vox/run_expA_rec_only_opus_q25/best_generator.pt \
+  --cws_mode nonuniform \
+  --cws_band_edges 0,64,160,257 \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --phase1_epochs 10 \
+  --phase2_epochs 0 \
+  --phase3_epochs 0 \
+  --batch_size 7 \
+  --num_workers 16 \
+  --log_interval 50 \
+  --audio_preflight_items 2 \
+  --segment_seconds 4.0 \
+  --lr_g_max 3e-5 \
+  --lr_g_min 5e-6 \
+  --warmup_steps_g 200 \
+  --si_sdr_weight 3 \
+  --mrstft_weight 1 \
+  --complex_weight 1 \
+  --grad_clip 30.0 \
+  --valid_sv_metric \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --device cuda
+```
+
+### 20.2 VoxCeleb1 非均匀 CWS phase2 speaker-aware finetune
+
+如果 phase1 的 valid_rec / sv_cos 没有明显变差，再从 phase1 best checkpoint 进入 phase2：
+
+```bash
+cd /root/camplusplus
+
+python -u my_methods_GAN/scripts/train_sv_codec_restore_gan.py \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_train_q25.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_valid_q25.csv \
+  --output_dir my_methods_GAN/exp/sv_codec_restore_vox/run_expB_nonuniform_cws_opus_q25 \
+  --init_generator_ckpt my_methods_GAN/exp/sv_codec_restore_vox/run_expA_nonuniform_cws_opus_q25/best_generator.pt \
+  --cws_mode nonuniform \
+  --cws_band_edges 0,64,160,257 \
+  --emb_dim 48 \
+  --num_blocks 5 \
+  --hidden_units 100 \
+  --attn_heads 4 \
+  --phase1_epochs 0 \
+  --phase2_epochs 5 \
+  --phase3_epochs 0 \
+  --batch_size 7 \
+  --num_workers 16 \
+  --log_interval 50 \
+  --audio_preflight_items 2 \
+  --segment_seconds 4.0 \
+  --phase2_segment_seconds 4.0 \
+  --lr_g_max 1e-5 \
+  --lr_g_min 2e-6 \
+  --warmup_steps_g 200 \
+  --si_sdr_weight 1.0 \
+  --mrstft_weight 0.5 \
+  --complex_weight 0.0 \
+  --use_campplus_train_loss \
+  --use_campplus_feat_loss \
+  --campplus_feat_layers block2,out_nonlinear \
+  --campplus_feat_loss_weight 2 \
+  --campplus_frontend diff_mel \
+  --spk_loss_weight 6 \
+  --no_use_spk_amsoftmax \
+  --grad_clip 30.0 \
+  --valid_sv_metric \
+  --campplus_ckpt my_methods_GAN/pretrained/speech_campplus_sv_en_voxceleb_16k/campplus_voxceleb.bin \
+  --device cuda
+```
+
+### 20.3 VoxCeleb1 训练数据处理位置
+
+当前文档里与 VoxCeleb1 训练数据处理最相关的位置：
+
+```text
+第 5 节：从原始 CN-Celeb 生成 true-pair 数据
+```
+
+注意：这一节标题仍写 CN-Celeb，但命令里的 `--raw_root` 实际指向 VoxCeleb1 train/wav：
+
+```text
+/root/rivermind-data/raw_data/vox1/train/wav
+```
+
+另外，第 7.2 附近有 `prepare_vox1_truepair_train_data.py` 的补充说明，并说明如果处理 VoxCeleb1 且需要剔除官方 verification trials 中的测试说话人，需要额外加：
+
+```text
+--exclude_test_speakers
+--test_trials /root/rivermind-data/experiment_data_voxceleb/test_list/veri_test2.txt
+```
+
+## 21. VoxCeleb1 先按 speaker 切分 manifest，再按表单构建训练集
+
+推荐流程：先只扫描 VoxCeleb1 train/wav 生成 clean-only 表单，再按 speaker-level 切分
+train/valid，最后让 `prepare_vox1_truepair_train_data.py` 只为表单内语音生成 clean/coded true-pair。
+这样可以避免直接对全量目录盲目转码，也方便后续复现实验子集。
+
+### 21.1 扫描 VoxCeleb1 train/wav 生成 clean-only manifest
+
+```bash
+cd /root/camplusplus
+
+python my_methods_GAN/scripts/build_clean_manifest.py \
+  --clean_root /root/autodl-tmp/raw_data/vox1/train/wav \
+  --extensions .wav \
+  --output_csv my_methods_GAN/exp/sv_codec_restore_vox/vox1_train_clean_manifest_all.csv
+```
+
+输出 CSV 字段包括：
+
+```text
+utt_id,spk_id,video_id,rel_path,clean_wav
+```
+
+### 21.2 按 speaker-level 切分 train/valid manifest
+
+VoxCeleb1 当前 train/wav 已经与 test/wav 说话人不重叠；这里做的是训练内部的
+speaker-level train/valid 切分。
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_train_clean_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_train_clean_manifest_spksplit.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_valid_clean_manifest_spksplit.csv \
+  --valid_ratio 0.1 \
+  --train_fraction 0.2 \
+  --valid_fraction 0.2 \
+  --stratified \
+  --seed 42
+```
+
+如果只想先取一个更小的 speaker 子集，例如最多 300 位 speaker、每人最多 80 条语音，可以用：
+
+```bash
+python my_methods_GAN/scripts/split_sv_manifest_by_speaker.py \
+  --input_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_train_clean_manifest_all.csv \
+  --train_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_train_clean_manifest_spk300_u80.csv \
+  --valid_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_valid_clean_manifest_spk300_u80.csv \
+  --valid_ratio 0.1 \
+  --max_speakers 300 \
+  --min_rows_per_speaker 20 \
+  --max_rows_per_speaker 80 \
+  --seed 42
+```
+
+### 21.3 按 train/valid 表单生成 clean/coded true-pair 数据
+
+这里使用 `--clean_write_mode hardlink`，避免 clean 语音再次经过 ffmpeg 转成 clean；coded
+仍然会正常经过 Opus 编解码并输出 WAV。
+
+```bash
+python my_methods_GAN/scripts/prepare_vox1_truepair_train_data.py \
+  --raw_root /root/autodl-tmp/raw_data/vox1/train/wav \
+  --test_wav_root /root/autodl-tmp/raw_data/vox1/test/wav \
+  --test_trials /root/autodl-tmp/raw_data/vox1/data/vox1_trials/veri_test2.txt \
+  --output_root /root/autodl-tmp/SC_data/data/voxceleb1_spksplit \
+  --codec opus \
+  --bitrate 16k \
+  --sample_rate 16000 \
+  --clean_write_mode hardlink \
+  --workers 16 \
+  --include_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_train_clean_manifest_spksplit.csv \
+  --valid_include_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_valid_clean_manifest_spksplit.csv \
+  --train_pair_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_train_spksplit_opus16k.csv \
+  --valid_pair_manifest my_methods_GAN/exp/sv_codec_restore_vox/vox1_pair_manifest_valid_spksplit_opus16k.csv
+```
+
+如果要先检查统计而不写文件，加：
+
+```text
+--dry_run
+```
+
+如果中断后继续，通常不要加 `--overwrite`；脚本会跳过已存在且大小正常的 coded WAV。
+如果确认要重做 clean 链接和 coded 文件，再加 `--overwrite`。

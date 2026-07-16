@@ -117,6 +117,7 @@ def _build_loader(
     sample_seed: int,
     stratified_sample: bool,
     codec_shift_samples: dict[str, int] | None,
+    clean_passthrough_ratio: float = 0.0,
 ) -> DataLoader:
     ds = SVCodecPairDataset(
         manifest_csv=manifest,
@@ -126,8 +127,130 @@ def _build_loader(
         sample_seed=sample_seed,
         stratified_sample=stratified_sample,
         codec_shift_samples=codec_shift_samples,
+        clean_passthrough_ratio=clean_passthrough_ratio,
     )
     return DataLoader(ds, batch_size=batch_size, shuffle=train, num_workers=num_workers, collate_fn=collate_pair_batch)
+
+
+def _format_sample_type_counts(loader: DataLoader) -> str:
+    counts = {}
+    dataset = getattr(loader, "dataset", None)
+    if dataset is not None and hasattr(dataset, "sample_type_counts"):
+        counts = dataset.sample_type_counts()
+    if not counts:
+        return "unknown"
+    return ",".join(f"{key}={counts[key]}" for key in sorted(counts))
+
+
+def _zero_rec_dict(device: torch.device) -> dict[str, torch.Tensor]:
+    z = torch.zeros((), device=device)
+    return {
+        "total": z,
+        "si_sdr": z,
+        "mrstft": z,
+        "complex": z,
+        "codec_total": z,
+        "clean_total": z,
+        "codec_count": z,
+        "clean_count": z,
+    }
+
+
+def _optional_weight(args: argparse.Namespace, name: str, fallback_name: str) -> float:
+    value = getattr(args, name, None)
+    if value is None:
+        return float(getattr(args, fallback_name))
+    return float(value)
+
+
+def _uses_split_clean_rec(args: argparse.Namespace, batch: dict) -> bool:
+    is_clean = batch.get("is_clean")
+    if is_clean is None or not bool(is_clean.any()):
+        return False
+    if abs(float(getattr(args, "clean_rec_loss_weight", 1.0)) - 1.0) > 1e-12:
+        return True
+    return any(getattr(args, name, None) is not None for name in (
+        "clean_si_sdr_weight",
+        "clean_mrstft_weight",
+        "clean_complex_weight",
+    ))
+
+
+def _loss_rec_train(restored: torch.Tensor, clean: torch.Tensor, batch: dict, args: argparse.Namespace, device: torch.device) -> dict[str, torch.Tensor]:
+    if not _uses_split_clean_rec(args, batch):
+        rec = loss_rec(
+            restored,
+            clean,
+            si_sdr_weight=args.si_sdr_weight,
+            mrstft_weight=args.mrstft_weight,
+            complex_weight=args.complex_weight,
+        )
+        zero = torch.zeros((), device=device)
+        return {
+            **rec,
+            "codec_total": rec["total"],
+            "clean_total": zero,
+            "codec_count": torch.tensor(float(restored.shape[0]), device=device),
+            "clean_count": zero,
+        }
+
+    is_clean = batch["is_clean"].to(device=device, dtype=torch.bool)
+    codec_mask = ~is_clean
+    clean_mask = is_clean
+    out = _zero_rec_dict(device)
+
+    if bool(codec_mask.any()):
+        codec_rec = loss_rec(
+            restored[codec_mask],
+            clean[codec_mask],
+            si_sdr_weight=args.si_sdr_weight,
+            mrstft_weight=args.mrstft_weight,
+            complex_weight=args.complex_weight,
+        )
+        out["total"] = out["total"] + codec_rec["total"]
+        out["si_sdr"] = out["si_sdr"] + codec_rec["si_sdr"]
+        out["mrstft"] = out["mrstft"] + codec_rec["mrstft"]
+        out["complex"] = out["complex"] + codec_rec["complex"]
+        out["codec_total"] = codec_rec["total"]
+        out["codec_count"] = codec_mask.sum().float()
+
+    if bool(clean_mask.any()):
+        clean_rec = loss_rec(
+            restored[clean_mask],
+            clean[clean_mask],
+            si_sdr_weight=_optional_weight(args, "clean_si_sdr_weight", "si_sdr_weight"),
+            mrstft_weight=_optional_weight(args, "clean_mrstft_weight", "mrstft_weight"),
+            complex_weight=_optional_weight(args, "clean_complex_weight", "complex_weight"),
+        )
+        clean_weight = float(getattr(args, "clean_rec_loss_weight", 1.0))
+        out["total"] = out["total"] + clean_weight * clean_rec["total"]
+        out["clean_total"] = clean_rec["total"]
+        out["clean_count"] = clean_mask.sum().float()
+        if not bool(codec_mask.any()):
+            out["si_sdr"] = clean_rec["si_sdr"]
+            out["mrstft"] = clean_rec["mrstft"]
+            out["complex"] = clean_rec["complex"]
+
+    return out
+
+
+def _grad_total_norm(parameters, norm_type: float = 2.0) -> torch.Tensor:
+    grads = [p.grad.detach() for p in parameters if p.grad is not None]
+    if not grads:
+        return torch.zeros(())
+    device = grads[0].device
+    norms = torch.stack([torch.linalg.vector_norm(g, ord=norm_type).to(device) for g in grads])
+    return torch.linalg.vector_norm(norms, ord=norm_type)
+
+
+def _load_generator_state(generator: torch.nn.Module, gen_state: dict, strict: bool, emit, label: str) -> None:
+    result = generator.load_state_dict(gen_state, strict=strict)
+    missing = list(getattr(result, "missing_keys", []))
+    unexpected = list(getattr(result, "unexpected_keys", []))
+    if missing:
+        emit(f"[{label}] generator missing keys: {missing[:12]}{' ...' if len(missing) > 12 else ''}")
+    if unexpected:
+        emit(f"[{label}] generator unexpected keys: {unexpected[:12]}{' ...' if len(unexpected) > 12 else ''}")
 
 
 def _save_ckpt(path: Path, state: dict):
@@ -250,6 +373,7 @@ def train_main(args: argparse.Namespace) -> None:
         args.train_sample_seed,
         args.train_stratified_sample,
         codec_shift_samples,
+        float(getattr(args, "train_clean_passthrough_ratio", 0.0)),
     )
     valid_loader = _build_loader(
         args.valid_manifest,
@@ -261,6 +385,7 @@ def train_main(args: argparse.Namespace) -> None:
         args.valid_sample_seed,
         args.valid_stratified_sample,
         codec_shift_samples,
+        float(getattr(args, "valid_clean_passthrough_ratio", 0.0)),
     )
     _emit(
         "[data] train samples={} valid samples={} (fractions: train={}, valid={})".format(
@@ -268,6 +393,14 @@ def train_main(args: argparse.Namespace) -> None:
             len(valid_loader.dataset),
             args.train_sample_fraction,
             args.valid_sample_fraction,
+        )
+    )
+    _emit(
+        "[data] sample_types train=[{}] valid=[{}] clean_passthrough_ratio train={} valid={}".format(
+            _format_sample_type_counts(train_loader),
+            _format_sample_type_counts(valid_loader),
+            float(getattr(args, "train_clean_passthrough_ratio", 0.0)),
+            float(getattr(args, "valid_clean_passthrough_ratio", 0.0)),
         )
     )
     _emit(f"[data] codec_time_align={bool(getattr(args, 'enable_codec_time_align', False))} shifts={codec_shift_samples}")
@@ -295,6 +428,8 @@ def train_main(args: argparse.Namespace) -> None:
         num_blocks=args.num_blocks,
         hidden_units=args.hidden_units,
         attn_heads=args.attn_heads,
+        cws_mode=getattr(args, "cws_mode", "uniform"),
+        cws_band_edges=getattr(args, "cws_band_edges", ""),
     ).to(device)
     mrd = MultiResolutionDiscriminator().to(device) if args.phase3_use_gan else None
     mbd = MultiBandDiscriminator().to(device) if args.phase3_use_gan and args.use_mbd else None
@@ -339,7 +474,24 @@ def train_main(args: argparse.Namespace) -> None:
             args.fm_loss_weight,
         )
     )
-
+    _emit(
+        "[config] cws_mode={} cws_band_edges={}".format(
+            getattr(args, "cws_mode", "uniform"),
+            getattr(args, "cws_band_edges", "") or "default",
+        )
+    )
+    _emit(
+        "[config] clean_passthrough: train_ratio={} valid_ratio={} clean_rec_weight={} "
+        "clean_si_sdr_weight={} clean_mrstft_weight={} clean_complex_weight={} codec_only_sv_loss={}".format(
+            float(getattr(args, "train_clean_passthrough_ratio", 0.0)),
+            float(getattr(args, "valid_clean_passthrough_ratio", 0.0)),
+            float(getattr(args, "clean_rec_loss_weight", 1.0)),
+            getattr(args, "clean_si_sdr_weight", None),
+            getattr(args, "clean_mrstft_weight", None),
+            getattr(args, "clean_complex_weight", None),
+            bool(getattr(args, "codec_only_sv_loss", False)),
+        )
+    )
     wavlm = None
     camp = None
 
@@ -383,7 +535,13 @@ def train_main(args: argparse.Namespace) -> None:
                 )
             )
 
-        generator.load_state_dict(state["generator"])
+        _load_generator_state(
+            generator,
+            state["generator"],
+            strict=False,
+            emit=_emit,
+            label="resume",
+        )
         if mrd is not None and state.get("mrd") is not None:
             mrd.load_state_dict(state["mrd"])
         if mbd is not None and state.get("mbd") is not None:
@@ -412,7 +570,13 @@ def train_main(args: argparse.Namespace) -> None:
             raise FileNotFoundError(f"init_generator_ckpt not found: {init_path}")
         init_state = torch.load(str(init_path), map_location="cpu")
         gen_state = init_state["generator"] if isinstance(init_state, dict) and "generator" in init_state else init_state
-        generator.load_state_dict(gen_state, strict=True)
+        _load_generator_state(
+            generator,
+            gen_state,
+            strict=False,
+            emit=_emit,
+            label="init",
+        )
         _emit(f"[init] loaded generator warm-start from: {init_path}")
     if start_epoch > total_epochs:
         _emit(
@@ -442,6 +606,7 @@ def train_main(args: argparse.Namespace) -> None:
             args.train_sample_seed,
             args.train_stratified_sample,
             codec_shift_samples,
+            float(getattr(args, "train_clean_passthrough_ratio", 0.0)),
         )
         valid_loader = _build_loader(
             args.valid_manifest,
@@ -453,6 +618,7 @@ def train_main(args: argparse.Namespace) -> None:
             args.valid_sample_seed,
             args.valid_stratified_sample,
             codec_shift_samples,
+            float(getattr(args, "valid_clean_passthrough_ratio", 0.0)),
         )
 
         if phase != prev_phase:
@@ -485,7 +651,7 @@ def train_main(args: argparse.Namespace) -> None:
         sum_mrstft = 0.0
         sum_complex = 0.0
         t0 = time.time()
-        log_interval = max(1, len(train_loader) // 20)
+        log_interval = max(1, int(getattr(args, "log_interval", 50)))
         for step, batch in enumerate(train_loader, start=1):
             g_lr = _warmup_cosine_lr(
                 step=phase_g_step,
@@ -505,13 +671,7 @@ def train_main(args: argparse.Namespace) -> None:
             restored = restored[:, :min_len]
             clean = clean[:, :min_len]
 
-            rec_dict = loss_rec(
-                restored,
-                clean,
-                si_sdr_weight=args.si_sdr_weight,
-                mrstft_weight=args.mrstft_weight,
-                complex_weight=args.complex_weight,
-            )
+            rec_dict = _loss_rec_train(restored, clean, batch, args, device)
             rec_term = args.rec_loss_weight * rec_dict["total"]
 
             # 分项累计
@@ -573,11 +733,26 @@ def train_main(args: argparse.Namespace) -> None:
                     adv_g = adv_g + loss_adv_generator(fake_mbd_g)
                     feat_g = feat_g + loss_feature_matching(real_mbd, fake_mbd_g)
 
-            if phase in {"phase2", "phase3"} and camp is not None and (
+            sv_clean = clean
+            sv_restored = restored
+            sv_spk_ids = batch["spk_id"]
+            if bool(getattr(args, "codec_only_sv_loss", False)) and "is_clean" in batch:
+                codec_mask_for_sv = (~batch["is_clean"].to(device=device, dtype=torch.bool))
+                if bool(codec_mask_for_sv.any()):
+                    sv_clean = clean[codec_mask_for_sv]
+                    sv_restored = restored[codec_mask_for_sv]
+                    keep_flags = codec_mask_for_sv.detach().cpu().tolist()
+                    sv_spk_ids = [spk for spk, keep in zip(batch["spk_id"], keep_flags) if keep]
+                else:
+                    sv_clean = clean[:0]
+                    sv_restored = restored[:0]
+                    sv_spk_ids = []
+
+            if phase in {"phase2", "phase3"} and camp is not None and sv_clean.shape[0] > 0 and (
                 args.use_campplus_train_loss or args.use_campplus_feat_loss or spk_classifier is not None
             ):
-                clean_fbank = _campplus_feats(clean, args.campplus_frontend)
-                rest_fbank = _campplus_feats(restored, args.campplus_frontend)
+                clean_fbank = _campplus_feats(sv_clean, args.campplus_frontend)
+                rest_fbank = _campplus_feats(sv_restored, args.campplus_frontend)
                 need_feats = bool(args.use_campplus_feat_loss and args.campplus_feat_layers)
 
                 if need_feats:
@@ -623,7 +798,7 @@ def train_main(args: argparse.Namespace) -> None:
                             )
 
                 if spk_classifier is not None:
-                    labels = torch.tensor([spk_to_idx[s] for s in batch["spk_id"]], dtype=torch.long, device=device)
+                    labels = torch.tensor([spk_to_idx[s] for s in sv_spk_ids], dtype=torch.long, device=device)
                     spk_cls_term = spk_classifier(emb_rest, labels)
 
             if phase == "phase3" and args.phase3_use_wavlm and wavlm is not None:
@@ -655,12 +830,17 @@ def train_main(args: argparse.Namespace) -> None:
 
             opt_g.zero_grad(set_to_none=True)
             g_loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=args.grad_clip)
+            grad_norm_pre_clip = torch.nn.utils.clip_grad_norm_(g_params, max_norm=args.grad_clip)
+            grad_norm_post_clip = _grad_total_norm(g_params)
             opt_g.step()
 
             train_loss += float(g_loss.detach().cpu())
             global_step += 1
             phase_g_step += 1
+
+            should_log = step == 1 or step == len(train_loader) or (step % log_interval == 0)
+            if not should_log:
+                continue
 
             avg_train = train_loss / step
             elapsed = time.time() - t0
@@ -676,11 +856,24 @@ def train_main(args: argparse.Namespace) -> None:
             gan_fm_raw = float(feat_g.detach().cpu())
             gan_adv_weighted = float(gan_adv_weighted_term.detach().cpu())
             gan_fm_weighted = float(gan_fm_weighted_term.detach().cpu())
-            generator_grad_norm = float(grad_norm.detach().cpu()) if torch.is_tensor(grad_norm) else float(grad_norm)
+            generator_grad_norm_pre_clip = (
+                float(grad_norm_pre_clip.detach().cpu()) if torch.is_tensor(grad_norm_pre_clip) else float(grad_norm_pre_clip)
+            )
+            generator_grad_norm_post_clip = (
+                float(grad_norm_post_clip.detach().cpu()) if torch.is_tensor(grad_norm_post_clip) else float(grad_norm_post_clip)
+            )
+            rec_codec_total = float(rec_dict.get("codec_total", torch.zeros((), device=device)).detach().cpu())
+            rec_clean_total = float(rec_dict.get("clean_total", torch.zeros((), device=device)).detach().cpu())
+            codec_batch = int(float(rec_dict.get("codec_count", torch.zeros((), device=device)).detach().cpu()))
+            clean_batch = int(float(rec_dict.get("clean_count", torch.zeros((), device=device)).detach().cpu()))
             step_message = (
                 f"[epoch {epoch:03d}][{phase}] step {step}/{len(train_loader)} "
                 f"avg_train={avg_train:.4f} "
                 f"rec_total={rec_total:.4f} "
+                f"rec_codec_total={rec_codec_total:.4f} "
+                f"rec_clean_total={rec_clean_total:.4f} "
+                f"codec_batch={codec_batch} "
+                f"clean_batch={clean_batch} "
                 f"spk_raw={spk_raw:.4f} "
                 f"spk_weighted={spk_weighted:.4f} "
                 f"spk_feat_raw={spk_feat_raw:.4f} "
@@ -692,7 +885,8 @@ def train_main(args: argparse.Namespace) -> None:
                 f"gan_fm_raw={gan_fm_raw:.4f} "
                 f"gan_adv_weighted={gan_adv_weighted:.4f} "
                 f"gan_fm_weighted={gan_fm_weighted:.4f} "
-                f"generator_grad_norm={generator_grad_norm:.3e} "
+                f"generator_grad_norm_pre_clip={generator_grad_norm_pre_clip:.3e} "
+                f"generator_grad_norm_post_clip={generator_grad_norm_post_clip:.3e} "
                 f"si_sdr={sum_sisdr/step:.4f} "
                 f"mrstft={sum_mrstft/step:.4f} "
                 f"complex={sum_complex/step:.4f} "
@@ -711,7 +905,7 @@ def train_main(args: argparse.Namespace) -> None:
         valid_sv_cos_sum = 0.0
         valid_sv_batches = 0
         with torch.no_grad():
-            for batch in valid_loader:
+            for valid_step, batch in enumerate(valid_loader, start=1):
                 coded = batch["coded"].to(device)
                 clean = batch["clean"].to(device)
                 restored = generator(coded)

@@ -21,6 +21,8 @@ class PairRow:
     clean_wav: str
     codec_wavs: tuple[str, ...]
     codec_type: str
+    sample_type: str = "codec"
+    deg_target: float = 1.0
 
 
 def _infer_codec_type_from_path(codec_wav: str) -> str:
@@ -56,6 +58,9 @@ def _read_manifest(path: str | Path, expand_multi_codec: bool = True) -> list[Pa
         for row in reader:
             codec_wavs = _parse_codec_wavs(row["codec_wav"])
             codec_type = (row.get("codec_type") or "").strip()
+            sample_type = (row.get("sample_type") or "codec").strip().lower()
+            deg_target_text = (row.get("deg_target") or "").strip()
+            deg_target = float(deg_target_text) if deg_target_text else (0.0 if sample_type == "clean" else 1.0)
             if expand_multi_codec and len(codec_wavs) > 1:
                 for codec_wav in codec_wavs:
                     one_codec_type = codec_type or _infer_codec_type_from_path(codec_wav)
@@ -66,6 +71,8 @@ def _read_manifest(path: str | Path, expand_multi_codec: bool = True) -> list[Pa
                             clean_wav=row["clean_wav"],
                             codec_wavs=(codec_wav,),
                             codec_type=one_codec_type,
+                            sample_type=sample_type,
+                            deg_target=deg_target,
                         )
                     )
             else:
@@ -79,6 +86,8 @@ def _read_manifest(path: str | Path, expand_multi_codec: bool = True) -> list[Pa
                         clean_wav=row["clean_wav"],
                         codec_wavs=codec_wavs,
                         codec_type=one_codec_type,
+                        sample_type=sample_type,
+                        deg_target=deg_target,
                     )
                 )
     return rows
@@ -106,6 +115,42 @@ def _sample_rows_by_speaker(rows: list[PairRow], fraction: float, seed: int) -> 
     return sampled
 
 
+def _add_clean_passthrough_rows(rows: list[PairRow], ratio: float, seed: int) -> list[PairRow]:
+    """Append synthetic clean->clean rows.
+
+    ``ratio`` is the desired clean fraction in the final dataset.  For example,
+    ratio=0.2 means clean rows should be about 20% of (codec + clean) rows.
+    """
+    ratio = float(ratio)
+    if ratio <= 0.0:
+        return rows
+    if ratio >= 1.0:
+        raise ValueError("clean_passthrough_ratio must be in [0, 1).")
+    if not rows:
+        return rows
+
+    clean_count = max(1, round(len(rows) * ratio / (1.0 - ratio)))
+    rng = random.Random(seed)
+    clean_rows: list[PairRow] = []
+    for clean_idx in range(clean_count):
+        src = rng.choice(rows)
+        clean_rows.append(
+            PairRow(
+                utt_id=f"{src.utt_id}_cleanpt_{clean_idx:08d}",
+                spk_id=src.spk_id,
+                clean_wav=src.clean_wav,
+                codec_wavs=(src.clean_wav,),
+                codec_type="clean",
+                sample_type="clean",
+                deg_target=0.0,
+            )
+        )
+
+    mixed = rows[:] + clean_rows
+    rng.shuffle(mixed)
+    return mixed
+
+
 class SVCodecPairDataset(Dataset):
     def __init__(
         self,
@@ -118,6 +163,8 @@ class SVCodecPairDataset(Dataset):
         stratified_sample: bool = True,
         expand_multi_codec: bool = True,
         codec_shift_samples: dict[str, int] | None = None,
+        clean_passthrough_ratio: float = 0.0,
+        clean_passthrough_seed: int | None = None,
     ):
         rows = _read_manifest(manifest_csv, expand_multi_codec=expand_multi_codec)
         if sample_fraction < 1.0:
@@ -129,6 +176,11 @@ class SVCodecPairDataset(Dataset):
                 rng.shuffle(shuffled)
                 keep = max(1, int(len(shuffled) * sample_fraction))
                 rows = shuffled[:keep]
+        rows = _add_clean_passthrough_rows(
+            rows,
+            ratio=clean_passthrough_ratio,
+            seed=sample_seed if clean_passthrough_seed is None else clean_passthrough_seed,
+        )
         self.rows = rows
         self.sample_rate = int(sample_rate)
         self.segment_len = int(sample_rate * segment_seconds)
@@ -136,6 +188,13 @@ class SVCodecPairDataset(Dataset):
         self.expand_multi_codec = bool(expand_multi_codec)
         self.codec_shift_samples = {str(k).lower(): int(v) for k, v in (codec_shift_samples or {}).items()}
         self._rng = random.Random(sample_seed)
+
+    def sample_type_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in self.rows:
+            key = str(row.sample_type or "codec")
+            counts[key] = counts.get(key, 0) + 1
+        return counts
 
     @staticmethod
     def _apply_codec_shift(clean: torch.Tensor, coded: torch.Tensor, shift_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -190,7 +249,11 @@ class SVCodecPairDataset(Dataset):
             codec_wav = self._rng.choice(row.codec_wavs)
         else:
             codec_wav = row.codec_wavs[idx % len(row.codec_wavs)]
-        coded = load_audio_mono(codec_wav, sample_rate=self.sample_rate)
+        is_clean = str(row.sample_type).lower() == "clean" or str(row.codec_type).lower() == "clean"
+        if is_clean and str(codec_wav) == str(row.clean_wav):
+            coded = clean.clone()
+        else:
+            coded = load_audio_mono(codec_wav, sample_rate=self.sample_rate)
 
         shift = self.codec_shift_samples.get(str(row.codec_type).lower(), 0)
         clean, coded = self._apply_codec_shift(clean, coded, shift)
@@ -204,6 +267,9 @@ class SVCodecPairDataset(Dataset):
             "coded": coded,
             "codec_wav": codec_wav,
             "codec_type": row.codec_type,
+            "sample_type": row.sample_type,
+            "is_clean": is_clean,
+            "deg_target": float(row.deg_target),
             "length": min(clean.numel(), coded.numel()),
         }
 
@@ -220,4 +286,7 @@ def collate_pair_batch(batch: list[dict]) -> dict:
         "spk_id": [item["spk_id"] for item in batch],
         "codec_wav": [item["codec_wav"] for item in batch],
         "codec_type": [item.get("codec_type", "") for item in batch],
+        "sample_type": [item.get("sample_type", "codec") for item in batch],
+        "is_clean": torch.tensor([bool(item.get("is_clean", False)) for item in batch], dtype=torch.bool),
+        "deg_target": torch.tensor([float(item.get("deg_target", 1.0)) for item in batch], dtype=torch.float32),
     }

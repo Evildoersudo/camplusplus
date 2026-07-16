@@ -458,7 +458,8 @@ def restore_in_chunks(
         if not pending_parts:
             return
         batch = torch.stack(pending_parts, dim=0).to(device)
-        out_batch = generator(batch).detach().cpu()
+        out_batch_t = generator(batch)
+        out_batch = out_batch_t.detach().cpu()
         for i, (start, end, valid_len) in enumerate(pending_meta):
             part_out = out_batch[i][:valid_len]
             restored[start:end] += part_out
@@ -878,8 +879,14 @@ def main():
             num_blocks=int(model_args.get("num_blocks", 5)),
             hidden_units=int(model_args.get("hidden_units", 100)),
             attn_heads=int(model_args.get("attn_heads", 4)),
+            cws_mode=str(model_args.get("cws_mode", "uniform")),
+            cws_band_edges=model_args.get("cws_band_edges", ""),
         )
-        generator.load_state_dict(ckpt["generator"])
+        load_result = generator.load_state_dict(ckpt["generator"], strict=False)
+        if load_result.missing_keys:
+            print(f"[generator] missing keys: {load_result.missing_keys[:12]}")
+        if load_result.unexpected_keys:
+            print(f"[generator] unexpected keys: {load_result.unexpected_keys[:12]}")
         generator.to(device)
         gen_tag = Path(args.generator_ckpt).stem
 
