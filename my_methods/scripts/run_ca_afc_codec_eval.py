@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import matplotlib
 import numpy as np
@@ -27,6 +27,9 @@ if __package__ is None or __package__ == "":
 from my_methods.data.ca_afc_data import compute_aux_features, compute_fbank, load_frozen_campplus, load_wav_mono
 from my_methods.models.ca_afc_frontend import CAAFCFrontend
 from speakerlab.utils.score_metrics import compute_c_norm, compute_eer, compute_pmiss_pfa_rbst
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_args():
@@ -64,6 +67,24 @@ def parse_condition(tag: str):
     return codec, bitrate, condition_tag
 
 
+def resolve_runtime_audio_path(path_like: str | Path) -> Path:
+    """Resolve host/container wav paths to a readable runtime path."""
+
+    path = Path(path_like)
+    if path.exists():
+        return path.resolve()
+
+    parts = PurePosixPath(str(path_like)).parts
+    if "camplusplus" in parts:
+        anchor = parts.index("camplusplus")
+        suffix_parts = parts[anchor + 1 :]
+        remapped = REPO_ROOT.joinpath(*suffix_parts)
+        if remapped.exists():
+            return remapped.resolve()
+
+    return path.resolve()
+
+
 def load_wav_scp(path: Path):
     """Load wav.scp into a `utt -> wav_path` mapping."""
 
@@ -74,7 +95,7 @@ def load_wav_scp(path: Path):
             if not line:
                 continue
             utt, wav = line.split(maxsplit=1)
-            mapping[utt] = Path(wav).resolve()
+            mapping[utt] = resolve_runtime_audio_path(wav)
     return mapping
 
 
@@ -188,10 +209,30 @@ def load_frontend(frontend_ckpt: Path, device: torch.device):
 
     state = torch.load(str(frontend_ckpt), map_location="cpu")
     args = state.get("args", {})
-    frontend = CAAFCFrontend(hidden_dim=int(args.get("hidden_dim", 64)), dropout=float(args.get("dropout", 0.1)))
+    codec_vocab_text = str(args.get("codec_vocab", "clean,aac,opus,amrwb,g711,unknown"))
+    codec_vocab = []
+    seen = set()
+    for item in codec_vocab_text.split(","):
+        name = item.strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        codec_vocab.append(name)
+    if "unknown" not in seen:
+        codec_vocab.append("unknown")
+
+    frontend = CAAFCFrontend(
+        hidden_dim=int(args.get("hidden_dim", 64)),
+        dropout=float(args.get("dropout", 0.1)),
+        band_scale=float(args.get("band_scale", 1.0)),
+        residual_scale=float(args.get("residual_scale", 0.1)),
+        num_codecs=len(codec_vocab),
+        codec_emb_dim=int(args.get("codec_emb_dim", 16)),
+    )
     frontend.load_state_dict(state["frontend_state"])
     frontend.eval()
     frontend.to(device)
+    frontend.codec_to_id = {name: idx for idx, name in enumerate(codec_vocab)}
     return frontend
 
 
@@ -202,7 +243,14 @@ def embedding_cache_path(cache_root: Path, condition_tag: str, utt: str):
     return cache_root / condition_tag / f"{safe}.npy"
 
 
-def extract_embedding_from_wav(wav: torch.Tensor, frontend, campplus, sample_rate: int, device: torch.device):
+def extract_embedding_from_wav(
+    wav: torch.Tensor,
+    codec_name: str,
+    frontend,
+    campplus,
+    sample_rate: int,
+    device: torch.device,
+):
     """Run CA-AFC then CAM++ and return a unit-normalized embedding."""
 
     codec_feat = compute_fbank(wav, sample_rate).unsqueeze(0).to(device)
@@ -211,8 +259,12 @@ def extract_embedding_from_wav(wav: torch.Tensor, frontend, campplus, sample_rat
     codec_feat = codec_feat[:, :min_len]
     aux_feat = aux_feat[:, :min_len]
 
+    codec_to_id = getattr(frontend, "codec_to_id", {"unknown": 0})
+    codec_id = codec_to_id.get(str(codec_name).lower(), codec_to_id.get("unknown", 0))
+    codec_ids = torch.tensor([int(codec_id)], dtype=torch.long, device=device)
+
     with torch.no_grad():
-        enhanced = frontend(codec_feat, aux_feat).enhanced
+        enhanced = frontend(codec_feat, aux_feat, codec_ids=codec_ids).enhanced
         embedding = campplus(enhanced).squeeze(0).cpu().numpy()
 
     norm = np.linalg.norm(embedding)
@@ -234,7 +286,7 @@ def compute_embeddings_for_condition(utt_to_wav, needed_utts, cache_root: Path, 
             continue
 
         wav = load_wav_mono(utt_to_wav[utt], args.sample_rate) if codec == "clean" else degrade_to_waveform(utt_to_wav[utt], codec, bitrate, args.sample_rate)
-        embedding = extract_embedding_from_wav(wav, frontend, campplus, args.sample_rate, device)
+        embedding = extract_embedding_from_wav(wav, codec, frontend, campplus, args.sample_rate, device)
         np.save(cache_path, embedding)
         generated += 1
 

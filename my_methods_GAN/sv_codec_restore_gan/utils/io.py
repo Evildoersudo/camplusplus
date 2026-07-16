@@ -1,0 +1,17 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+
+def ensure_dir(path: str | Path) -> Path:
+    p = Path(path).resolve()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def save_json(path: str | Path, payload: Any) -> None:
+    p = Path(path).resolve()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

@@ -1,171 +1,124 @@
 # CA-AFC 服务器部署与运行流程
 
-本文档按你当前服务器目录约定编写：
+> 统一说明：本文件维护当前服务器实跑命令。每次新增或修改脚本后，需同步把可执行命令更新到本文件对应章节。
 
-- 代码根目录：
-  - `~/lkj/camplusplus`
-- 数据下载目录：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/download_data`
+本文档按当前 DGX Spark + Docker 方案整理，默认约定如下：
 
-也就是说，这一版不是“代码和数据分离到 `/root/autodl-tmp`”的方案，而是**数据直接放在项目目录内部**。
+- 项目根目录：`~/lkj/camplusplus`
+- 容器内项目目录：`/workspace/camplusplus`
+- 数据目录：`~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data`
+- 预训练 CAM++：`pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin`
 
-本文档说明如何从“上传并解压数据集”开始，一步一步完成：
+本文档覆盖：
 
-1. 准备原始数据目录
-2. 生成 CN-Celeb clean / test / trials / mixed codec 数据
-3. 构建 CA-AFC 的 pair manifest
-4. 预提取离线特征
-5. 训练 CA-AFC
-6. 评测 `CA-AFC + CAM++`
+1. Docker 环境构建
+2. CN-Celeb mixed codec 数据准备
+3. pair manifest 与 feature manifest 构建
+4. CA-AFC 预提特征训练
+5. 断点续训与评测
 
-## 1. 目录约定
+## 1. Docker 环境
 
-本文档统一使用以下目录：
+### 1.1 基础配置
 
-- 项目根目录：
-  - `~/lkj/camplusplus`
-- 下载数据目录：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/download_data`
-- 数据工作目录：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database`
-- 原始解压目录：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data`
-- 预训练模型目录：
-  - `~/lkj/camplusplus/pretrained`
-- `my_methods` 实验输出目录：
-  - `~/lkj/camplusplus/my_methods/exp`
+当前部署使用：
 
-进入项目目录：
+- [Dockerfile](/e:/Graduation_project/camplusplus/Dockerfile)
+- [docker-compose.yml](/e:/Graduation_project/camplusplus/docker-compose.yml)
+- [req_no_torch.txt](/e:/Graduation_project/camplusplus/req_no_torch.txt)
+
+设计原则：
+
+- 基础镜像使用 NGC PyTorch 镜像，直接复用镜像内 `torch`
+- 非 `torch/torchaudio` 依赖单独安装
+- `ffmpeg` 从源码编译，并显式启用：
+  - `aac`
+  - `libopus`
+  - `libvo_amrwbenc`
+
+### 1.2 登录 NGC
+
+```bash
+docker login nvcr.io
+```
+
+用户名填写：
+
+```text
+$oauthtoken
+```
+
+密码填写你的 NGC API Key。
+
+### 1.3 构建容器
+
+首次构建：
 
 ```bash
 cd ~/lkj/camplusplus
+docker compose build
 ```
 
-## 2. 环境准备
+如果你修改了基础镜像、`req_no_torch.txt` 或 `Dockerfile` 中的核心层，再考虑：
 
-### 2.1 Python 环境
+```bash
+docker compose build --no-cache
+```
+
+### 1.4 启动并进入容器
 
 ```bash
 cd ~/lkj/camplusplus
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install soundfile
+docker compose up -d
+docker compose exec camplusplus bash
 ```
 
-### 2.2 GPU 版 PyTorch
+### 1.5 容器内验证
 
-如果服务器是 CUDA 12.1，可执行：
+先确认 `torch/torchaudio`：
 
 ```bash
-pip uninstall -y torch torchaudio
-pip install torch==2.4.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+python -c "import torch, torchaudio; print(torch.__version__); print(torchaudio.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
 ```
 
-### 2.3 ffmpeg
-
-固定码率 codec 数据生成和评测依赖 `ffmpeg`：
+再确认 `ffmpeg` 编码器：
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-ffmpeg -version
+ffmpeg -hide_banner -encoders | grep -E 'libopus|aac|libvo_amrwbenc|pcm_alaw|pcm_mulaw'
 ```
 
-## 3. 数据应该放在哪里
+## 2. 数据目录约定
 
-### 3.1 压缩包放置位置
+容器内统一使用：
 
-把原始压缩包上传到：
-
-- `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/download_data`
-
-例如：
-
-- `CN-Celeb_flac.tar.gz`
-- `musan.tar.gz`
-- `RIRS_NOISES.zip`
-
-### 3.2 解压后的目标位置
-
-把原始数据解压到：
-
-- `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data`
+- 下载目录：`/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/download_data`
+- 原始解压目录：`/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data`
+- 工作目录：`/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database`
 
 先创建目录：
 
 ```bash
-mkdir -p ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/download_data
-mkdir -p ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data
+mkdir -p /workspace/camplusplus/egs/3dspeaker/sv-cam++/data/download_data
+mkdir -p /workspace/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data
+mkdir -p /workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database
 ```
 
-### 3.3 解压示例
-
-```bash
-cd ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/download_data
-
-tar -xzf CN-Celeb_flac.tar.gz -C ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data
-tar -xzf musan.tar.gz -C ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data
-unzip RIRS_NOISES.zip -d ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data
-```
-
-解压后建议形成这样的结构：
-
-```text
-~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data/
-├─ CN-Celeb_flac/
-│  ├─ data/
-│  └─ eval/
-├─ musan/
-└─ RIRS_NOISES/
-```
-
-## 4. 预训练 CAM++ 放在哪里
-
-建议放在：
-
-- `~/lkj/camplusplus/pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin`
-
-如果目录不存在，先创建：
-
-```bash
-mkdir -p ~/lkj/camplusplus/pretrained/speech_campplus_sv_zh-cn_16k-common
-```
-
-## 5. 为什么不要直接复用本地 manifest
-
-你本地生成过的这些文件通常包含 Windows 绝对路径：
-
-- `my_methods/note/cnceleb_fixedrate_pair_manifest.csv`
-- `my_methods/note/cnceleb_fixedrate_feature_manifest.csv`
-- 各类 `wav.scp`
-- 部分 `train.csv`
-
-因此，部署到服务器时更稳的做法是：
-
-- 不直接拷贝这些 manifest 作为正式输入
-- 在服务器上重新生成
-
-这样生成出来的路径天然就是服务器路径，不会再受 `E:\...` 影响。
-
-## 6. 第一步：生成 CN-Celeb 工作目录和 mixed codec 训练数据
+## 3. 生成 CN-Celeb mixed codec 数据
 
 使用脚本：
 
-- [prepare_cnceleb_mixed_data.py](E:/Speaker_recognition/Graduation_Project/camplusplus/egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py)
+- [prepare_cnceleb_mixed_data.py](/e:/Graduation_project/camplusplus/egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py)
 
-在服务器上执行：
+在容器内执行：
 
 ```bash
-cd ~/lkj/camplusplus
+cd /workspace/camplusplus
 
 python egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py \
-  --download_dir ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/download_data \
-  --data_root ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data \
+  --download_dir /workspace/camplusplus/egs/3dspeaker/sv-cam++/data/download_data \
+  --data_root egs/3dspeaker/sv-cam++/data \
   --workspace_name CN_celeb_database \
-  --raw_root ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/raw_data \
+  --raw_root egs/3dspeaker/sv-cam++/data/raw_data \
   --clean_ratio 0.25 \
   --opus_ratio 0.25 \
   --aac_ratio 0.25 \
@@ -179,98 +132,309 @@ python egs/3dspeaker/sv-cam++/local/prepare_cnceleb_mixed_data.py \
   --prepare_csv_nj 8
 ```
 
-如果你要第一次全量重做 degraded 音频，可以加：
+首次强制重建 degraded 音频可加：
 
 ```bash
 --overwrite
 ```
 
-生成后关键目录通常是：
+关键输出目录：
 
 - clean train：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train`
+  - `/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train`
 - test：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/test`
+  - `/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/test`
 - trials：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/trials`
-- fixedrate mixed train：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_fixedrate_mixed/train`
-- fixedrate mixed 音频：
-  - `~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_fixedrate_mixed_audio`
+  - `/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/trials`
+- mixed train：
+  - `/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_mixed/train`
+- mixed audio：
+  - `/workspace/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_mixed_audio`
 
-## 7. 第二步：构建 CA-AFC 训练配对清单
+说明：
+
+- `prepare_cnceleb_mixed_data.py` 默认输出是 `cnceleb_mixed/train` 和 `cnceleb_mixed_audio`
+- `cnceleb_fixedrate_mixed/train` 与 `cnceleb_fixedrate_mixed_audio` 属于 fixed-rate 封装脚本默认命名，不是这个脚本的默认输出
+
+## 4. 构建 CA-AFC pair manifest
 
 使用脚本：
 
-- [build_pair_manifest.py](E:/Speaker_recognition/Graduation_Project/camplusplus/my_methods/tools/build_pair_manifest.py)
+- [build_pair_manifest.py](/e:/Graduation_project/camplusplus/my_methods/tools/build_pair_manifest.py)
 
-执行命令：
+容器内执行：
 
 ```bash
-cd ~/lkj/camplusplus
+cd /workspace/camplusplus
 
 python my_methods/tools/build_pair_manifest.py \
-  --clean_wav_scp ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train/wav.scp \
-  --codec_wav_scp ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_fixedrate_mixed/train/wav.scp \
-  --utt2spk ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train/utt2spk \
-  --codec_assignment_csv ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_fixedrate_mixed/train/codec_assignment.csv \
-  --output_csv ~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_pair_manifest.csv
+  --clean_wav_scp egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train/wav.scp \
+  --codec_wav_scp egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_mixed/train/wav.scp \
+  --utt2spk egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/clean_train/utt2spk \
+  --codec_assignment_csv egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb_mixed/train/codec_assignment.csv \
+  --output_csv my_methods/exp/cnceleb_fixedrate_pair_manifest.csv
 ```
 
 输出：
 
-- `~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_pair_manifest.csv`
+- `/workspace/camplusplus/my_methods/exp/cnceleb_fixedrate_pair_manifest.csv`
 
-## 8. 第三步：预提取离线特征
+## 5. 预提特征
 
 使用脚本：
 
-- [precompute_pair_features.py](E:/Speaker_recognition/Graduation_Project/camplusplus/my_methods/tools/precompute_pair_features.py)
+- [precompute_pair_features.py](/e:/Graduation_project/camplusplus/my_methods/tools/precompute_pair_features.py)
 
-执行命令：
+容器内执行：
 
 ```bash
-cd ~/lkj/camplusplus
+cd /workspace/camplusplus
 
 python my_methods/tools/precompute_pair_features.py \
-  --pair_manifest ~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_pair_manifest.csv \
-  --output_root ~/lkj/camplusplus/my_methods/exp/ca_afc_features_cnceleb_fixedrate \
-  --output_manifest ~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --pair_manifest my_methods/exp/cnceleb_fixedrate_pair_manifest.csv \
+  --output_root my_methods/exp/ca_afc_features_cnceleb_fixedrate \
+  --output_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
   --sample_rate 16000
 ```
 
+可选并行：
+
+```bash
+--num_workers 4
+```
+
 输出：
 
-- 特征目录：
-  - `~/lkj/camplusplus/my_methods/exp/ca_afc_features_cnceleb_fixedrate`
-- 特征清单：
-  - `~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_feature_manifest.csv`
+- 特征目录：`/workspace/camplusplus/my_methods/exp/ca_afc_features_cnceleb_fixedrate`
+- 特征清单：`/workspace/camplusplus/my_methods/exp/cnceleb_fixedrate_feature_manifest.csv`
 
-## 9. 第四步：先做 smoke test
+## 6. smoke test
 
 先用小样本确认：
 
 - 数据读取正常
 - 训练链路正常
 - checkpoint 正常保存
-- loss 和 ETA 日志正常
-
-执行命令：
+- loss、lr、ETA 日志正常
 
 ```bash
-cd ~/lkj/camplusplus
+cd /workspace/camplusplus
 
-python my_methods/scripts/train_ca_afc.py \
-  --train_feature_manifest ~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
-  --output_dir ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_smoke \
-  --campplus_model_bin ~/lkj/camplusplus/pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
+python -u my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate_smoke \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
   --max_frames 300 \
-  --batch_size 16 \
+  --batch_size 32 \
   --num_workers 0 \
   --pretrain_epochs 1 \
   --finetune_epochs 1 \
-  --max_train_samples 4096 \
-  --max_valid_samples 512 \
+  --max_train_samples 512 \
+  --max_valid_samples 64 \
+  --optimizer adamw \
+  --lr 1e-3 \
+  --weight_decay 1e-4 \
+  --scheduler cosine \
+  --warmup_steps 50 \
+  --min_lr 1e-5 \
+  --grad_clip_norm 5.0 \
+  --log_interval 1 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
+  --device cuda
+```
+
+## 7. 正式训练 CA-AFC
+
+使用脚本：
+
+- [train_ca_afc.py](/e:/Graduation_project/camplusplus/my_methods/scripts/train_ca_afc.py)
+
+当前推荐先用 `AdamW + warmup + cosine`：
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
+  --max_frames 300 \
+  --batch_size 128 \
+  --num_workers 4 \
+  --pretrain_epochs 5 \
+  --finetune_epochs 10 \
+  --optimizer adamw \
+  --lr 1e-3 \
+  --weight_decay 1e-4 \
+  --scheduler cosine \
+  --warmup_steps 1000 \
+  --min_lr 1e-5 \
+  --grad_clip_norm 5.0 \
+  --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
+  --device cuda
+```
+
+当前版本建议先用“稳定收敛 + 可观测诊断”配置（含梯度探针与 finetune codec 加权采样）：
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --max_frames 300 \
+  --batch_size 64 \
+  --num_workers 4 \
+  --pretrain_epochs 15 \
+  --finetune_epochs 20 \
+  --optimizer adamw \
+  --lr 1e-3 \
+  --weight_decay 1e-4 \
+  --scheduler none \
+  --grad_clip_norm 5.0 \
+  --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
+  --emb_term_target_ratio 0.10 \
+  --emb_lambda_scale_max 20.0 \
+  --grad_probe_interval 100 \
+  --finetune_codec_weights clean=0.4,aac=1.0,opus=1.5,amrwb=1.8 \
+  --device cuda 2>&1 | tee my_methods/exp/ca_afc_cnceleb_fixedrate/train.log
+```
+
+如果要做 `SGD + momentum` 对照实验：
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate_sgd \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
+  --max_frames 300 \
+  --batch_size 64 \
+  --num_workers 4 \
+  --pretrain_epochs 15 \
+  --finetune_epochs 20 \
+  --optimizer sgd \
+  --momentum 0.9 \
+  --nesterov \
+  --lr 0.01 \
+  --weight_decay 1e-4 \
+  --scheduler cosine \
+  --warmup_steps 1000 \
+  --min_lr 1e-4 \
+  --grad_clip_norm 5.0 \
+  --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
+  --device cuda
+```
+
+说明：
+
+- 每个 epoch 都会保存一次 checkpoint 到 `output_dir/checkpoints/`
+- `best_frontend.pt` 保存当前最佳验证集权重
+- checkpoint 现在包含：
+  - `frontend_state`
+  - `optimizer_state`
+  - `scheduler_state`
+  - `epoch`
+  - `stage`
+  - `global_step`
+
+### 7.1 断点续训
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --resume \
+  --device cuda
+```
+
+## 7.2 训练日志自动汇总与收敛曲线
+
+使用脚本：
+
+- `my_methods/tools/summarize_train_log.py`
+
+功能：
+
+- 从 `train.log` 提取每个 epoch 的 `loss / rec_loss / emb_loss / emb/rec / grad_emb/rec / lr`
+- 终端打印统计表
+- 导出 JSON
+- 生成收敛曲线 PNG
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/tools/summarize_train_log.py \
+  --log my_methods/exp/ca_afc_cnceleb_fixedrate/train.log \
+  --split both \
+  --trend_width 30 \
+  --json_out my_methods/exp/ca_afc_cnceleb_fixedrate/epoch_curve_summary.json \
+  --plot_dir my_methods/exp/ca_afc_cnceleb_fixedrate/plots
+```
+
+仅查看训练集统计：
+
+```bash
+python my_methods/tools/summarize_train_log.py \
+  --log my_methods/exp/ca_afc_cnceleb_fixedrate/train.log \
+  --split train
+```
+
+## 8. 直接从音频训练（可选）
+
+如果你不想预提特征，可使用：
+
+- [train_ca_afc_from_audio.py](/e:/Graduation_project/camplusplus/my_methods/scripts/train_ca_afc_from_audio.py)
+
+```bash
+cd /workspace/camplusplus
+
+python my_methods/scripts/train_ca_afc_from_audio.py \
+  --train_manifest my_methods/exp/cnceleb_fixedrate_pair_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate_audio \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --max_frames 300 \
+  --batch_size 32 \
+  --num_workers 4 \
+  --pretrain_epochs 15 \
+  --finetune_epochs 20 \
+  --optimizer adamw \
+  --lr 1e-3 \
+  --weight_decay 1e-4 \
+  --scheduler cosine \
+  --warmup_steps 1000 \
+  --min_lr 1e-5 \
+  --grad_clip_norm 5.0 \
   --log_interval 20 \
   --lambda_rec 1.0 \
   --lambda_emb 0.3 \
@@ -278,124 +442,107 @@ python my_methods/scripts/train_ca_afc.py \
   --device cuda
 ```
 
-输出目录：
-
-- `~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_smoke`
-
-## 10. 第五步：正式训练 CA-AFC
-
-smoke test 没问题后，再跑正式训练：
+音频版续训：
 
 ```bash
-cd ~/lkj/camplusplus
+cd /workspace/camplusplus
 
-python my_methods/scripts/train_ca_afc.py \
-  --train_feature_manifest ~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
-  --output_dir ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate \
-  --campplus_model_bin ~/lkj/camplusplus/pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
-  --max_frames 300 \
-  --batch_size 16 \
-  --num_workers 0 \
-  --pretrain_epochs 5 \
-  --finetune_epochs 10 \
-  --log_interval 100 \
-  --lambda_rec 1.0 \
-  --lambda_emb 0.3 \
-  --lambda_smooth 0.01 \
-  --device cuda
-```
-
-输出目录：
-
-- `~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate`
-
-断点续训：
-
-```bash
-cd ~/lkj/camplusplus
-
-python my_methods/scripts/train_ca_afc.py \
-  --train_feature_manifest ~/lkj/camplusplus/my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
-  --output_dir ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate \
-  --campplus_model_bin ~/lkj/camplusplus/pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
+python my_methods/scripts/train_ca_afc_from_audio.py \
+  --train_manifest my_methods/exp/cnceleb_fixedrate_pair_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate_audio \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
   --resume \
   --device cuda
 ```
 
-## 11. 第六步：评测 CA-AFC + CAM++
+## 9. 评测 CA-AFC + CAM++
 
 使用脚本：
 
-- [run_ca_afc_codec_eval.py](E:/Speaker_recognition/Graduation_Project/camplusplus/my_methods/scripts/run_ca_afc_codec_eval.py)
-
-执行命令：
+- [run_ca_afc_codec_eval.py](/e:/Graduation_project/camplusplus/my_methods/scripts/run_ca_afc_codec_eval.py)
 
 ```bash
-cd ~/lkj/camplusplus
+cd /workspace/camplusplus
 
 python my_methods/scripts/run_ca_afc_codec_eval.py \
-  --test_wav_scp ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/test/wav.scp \
-  --trials_file ~/lkj/camplusplus/egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/trials/trials.lst \
-  --frontend_ckpt ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate/best_frontend.pt \
-  --campplus_model_bin ~/lkj/camplusplus/pretrained/speech_campplus_sv_zh-cn_16k-common/campplus_cn_common.bin \
+  --test_wav_scp egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/test/wav.scp \
+  --trials_file egs/3dspeaker/sv-cam++/data/CN_celeb_database/cnceleb/trials/trials.lst \
+  --frontend_ckpt my_methods/exp/ca_afc_cnceleb_fixedrate/best_frontend.pt \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
   --codec_conditions clean,opus@16k,aac@16k,amrwb@15.85k \
-  --embedding_cache_root ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_eval/embedding_cache \
+  --embedding_cache_root my_methods/exp/ca_afc_cnceleb_fixedrate_eval/embedding_cache \
   --limit 2000 \
   --target_limit 100 \
   --nontarget_limit 1900 \
-  --report_csv ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.csv \
-  --report_json ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.json \
-  --table_md ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.md \
-  --plot_dir ~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_eval/plots \
+  --report_csv my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.csv \
+  --report_json my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.json \
+  --table_md my_methods/exp/ca_afc_cnceleb_fixedrate_eval/report.md \
+  --plot_dir my_methods/exp/ca_afc_cnceleb_fixedrate_eval/plots \
   --device cuda
 ```
 
-输出目录：
+说明：
 
-- `~/lkj/camplusplus/my_methods/exp/ca_afc_cnceleb_fixedrate_eval`
+- 评测脚本会自动从 `frontend_ckpt` 里读取 `codec_vocab`，并按当前评测 codec 条件传入前端条件调制分支。
 
-关键产物：
+## 10. 长时任务建议
 
-- `report.csv`
-- `report.json`
-- `report.md`
-- `plots/ca_afc_eer.png`
-- `plots/ca_afc_min_dcf.png`
+容器内长训练不要直接裸跑，建议用 `tmux`：
 
-## 12. 最终建议目录结构
-
-```text
-~/lkj/camplusplus/
-├─ pretrained/
-│  └─ speech_campplus_sv_zh-cn_16k-common/
-│     └─ campplus_cn_common.bin
-├─ my_methods/
-│  └─ exp/
-│     ├─ cnceleb_fixedrate_pair_manifest.csv
-│     ├─ cnceleb_fixedrate_feature_manifest.csv
-│     ├─ ca_afc_features_cnceleb_fixedrate/
-│     ├─ ca_afc_cnceleb_fixedrate_smoke/
-│     ├─ ca_afc_cnceleb_fixedrate/
-│     └─ ca_afc_cnceleb_fixedrate_eval/
-└─ egs/
-   └─ 3dspeaker/
-      └─ sv-cam++/
-         └─ data/
-            ├─ download_data/
-            ├─ raw_data/
-            └─ CN_celeb_database/
+```bash
+apt-get update && apt-get install -y tmux
+tmux new -s caafc
 ```
 
-## 13. 最关键的注意事项
+在 `tmux` 里启动训练并落日志：
 
-部署到服务器时，最重要的是：
+```bash
+cd /workspace/camplusplus
 
-1. 不要直接复用本地生成的 pair manifest 和 feature manifest
-2. 到服务器后重新生成：
-   - `wav.scp`
-   - `pair manifest`
-   - `feature manifest`
-   - `.pt` 离线特征
-3. 训练和评测时尽量都使用服务器本地重新生成的文件
+python my_methods/scripts/train_ca_afc.py \
+  --train_feature_manifest my_methods/exp/cnceleb_fixedrate_feature_manifest.csv \
+  --output_dir my_methods/exp/ca_afc_cnceleb_fixedrate \
+  --campplus_model_bin pretrained/speech_campplus_sv_zh-cn_3dspeaker_16k/campplus_cn_3dspeaker.bin \
+  --codec_vocab clean,aac,opus,amrwb,unknown \
+  --codec_emb_dim 16 \
+  --max_frames 300 \
+  --batch_size 64 \
+  --num_workers 4 \
+  --pretrain_epochs 15 \
+  --finetune_epochs 20 \
+  --optimizer adamw \
+  --lr 1e-3 \
+  --weight_decay 1e-4 \
+  --scheduler none \
+  --grad_clip_norm 5.0 \
+  --log_interval 20 \
+  --band_scale 0.3 \
+  --residual_scale 0.05 \
+  --lambda_rec 1.0 \
+  --lambda_emb 0.3 \
+  --lambda_smooth 0.01 \
+  --emb_term_target_ratio 0.10 \
+  --emb_lambda_scale_max 20.0 \
+  --grad_probe_interval 100 \
+  --finetune_codec_weights clean=0.4,aac=1.0,opus=1.5,amrwb=1.8 \
+  --device cuda 2>&1 | tee my_methods/exp/ca_afc_cnceleb_fixedrate/train.log
+```
 
-这样可以彻底避开 Windows 绝对路径导致的问题。
+退出但不停止训练：
+
+```text
+Ctrl+b 然后按 d
+```
+
+重新连回：
+
+```bash
+tmux attach -t caafc
+```
+
+## 11. 最关键的注意事项
+
+1. 不要直接复用宿主机生成的旧 manifest 作为容器正式输入，最好在容器内重新生成
+2. 容器内所有路径统一使用 `/workspace/camplusplus/...`
+3. 旧的宿主机绝对路径 `/home/dgx/...` 与容器路径不一致，容易导致读取失败
+4. 预提特征训练更适合正式实验；直接从音频训练更适合调试或简化流程

@@ -1,0 +1,23 @@
+services:
+  camplusplus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: nvcr.io/nvidia/pytorch:26.02-py3
+    image: camplusplus:dgx-spark
+    container_name: camplusplus
+    working_dir: /workspace/camplusplus
+    platform: linux/arm64
+    gpus: all
+    init: true
+    stdin_open: true
+    tty: true
+    shm_size: "32gb"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/workspace/camplusplus
+    command: sleep infinity
